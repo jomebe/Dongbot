@@ -3,9 +3,54 @@ import { readFileSync } from "node:fs";
 const PROFANITY_LEVEL_LOW = "low";
 const PROFANITY_LEVEL_MEDIUM = "medium";
 const PROFANITY_LEVEL_HIGH = "high";
-const SLANG_CSV_URL = new URL("./slang.csv", import.meta.url);
+const LOW_REPRESENTATIVE_CSV_URL = new URL(
+  "./korean_profanity_representative_low.csv",
+  import.meta.url,
+);
+const MEDIUM_REPRESENTATIVE_CSV_URL = new URL(
+  "./korean_profanity_representative_medium.csv",
+  import.meta.url,
+);
+const HIGH_REPRESENTATIVE_CSV_URL = new URL(
+  "./korean_profanity_representative_high.csv",
+  import.meta.url,
+);
 
-function parseSlangCsv(csvText) {
+function parseCsvRow(rawRow) {
+  const columns = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < rawRow.length; index += 1) {
+    const char = rawRow[index];
+
+    if (char === '"') {
+      const nextChar = rawRow[index + 1];
+
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        index += 1;
+        continue;
+      }
+
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      columns.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  columns.push(current.trim());
+  return columns;
+}
+
+function parseRepresentativeCsv(csvText, expectedLevel) {
   if (typeof csvText !== "string" || !csvText.trim()) {
     return [];
   }
@@ -20,36 +65,52 @@ function parseSlangCsv(csvText) {
       continue;
     }
 
-    const rowWithoutTrailingComma = trimmedRow.endsWith(",")
-      ? trimmedRow.slice(0, -1)
-      : trimmedRow;
+    const [level, term] = parseCsvRow(trimmedRow);
+    const normalizedLevel = level?.toLowerCase();
 
-    const unquotedRow = rowWithoutTrailingComma
-      .replace(/^"/, "")
-      .replace(/"$/, "")
-      .trim();
-
-    if (!unquotedRow || unquotedRow.toLowerCase() === "slang") {
+    if (normalizedLevel === "level" || !term) {
       continue;
     }
 
-    terms.push(unquotedRow);
+    if (normalizedLevel !== expectedLevel) {
+      continue;
+    }
+
+    terms.push(term);
   }
 
   return terms;
 }
 
-function loadDefaultSlangTerms() {
+function loadRepresentativeTermsFromCsv(fileUrl, expectedLevel) {
   try {
-    const csvText = readFileSync(SLANG_CSV_URL, "utf8");
-    return parseSlangCsv(csvText);
+    const csvText = readFileSync(fileUrl, "utf8");
+    return parseRepresentativeCsv(csvText, expectedLevel);
   } catch (error) {
-    console.warn("기본 욕설 CSV를 읽지 못해 빈 목록으로 동작합니다.", error);
+    console.warn(
+      `기본 욕설 CSV(${expectedLevel})를 읽지 못해 빈 목록으로 동작합니다.`,
+      error,
+    );
     return [];
   }
 }
 
-const defaultSlangTerms = loadDefaultSlangTerms();
+function loadDefaultRepresentativeTermsByLevel() {
+  return {
+    [PROFANITY_LEVEL_LOW]: loadRepresentativeTermsFromCsv(
+      LOW_REPRESENTATIVE_CSV_URL,
+      PROFANITY_LEVEL_LOW,
+    ),
+    [PROFANITY_LEVEL_MEDIUM]: loadRepresentativeTermsFromCsv(
+      MEDIUM_REPRESENTATIVE_CSV_URL,
+      PROFANITY_LEVEL_MEDIUM,
+    ),
+    [PROFANITY_LEVEL_HIGH]: loadRepresentativeTermsFromCsv(
+      HIGH_REPRESENTATIVE_CSV_URL,
+      PROFANITY_LEVEL_HIGH,
+    ),
+  };
+}
 
 function normalizeForProfanityDetection(content) {
   if (typeof content !== "string") {
@@ -104,18 +165,14 @@ function normalizeModerationLevel(rawLevel) {
 
 function resolveActiveDetectionLevels(moderationLevel) {
   if (moderationLevel === PROFANITY_LEVEL_LOW) {
-    return [PROFANITY_LEVEL_HIGH];
+    return [PROFANITY_LEVEL_LOW];
   }
 
   if (moderationLevel === PROFANITY_LEVEL_HIGH) {
-    return [
-      PROFANITY_LEVEL_LOW,
-      PROFANITY_LEVEL_MEDIUM,
-      PROFANITY_LEVEL_HIGH,
-    ];
+    return [PROFANITY_LEVEL_HIGH];
   }
 
-  return [PROFANITY_LEVEL_MEDIUM, PROFANITY_LEVEL_HIGH];
+  return [PROFANITY_LEVEL_MEDIUM];
 }
 
 function normalizeTermsByLevel(rawTermsByLevel = {}) {
@@ -130,29 +187,9 @@ function normalizeTermsByLevel(rawTermsByLevel = {}) {
   };
 }
 
-function splitCsvTermsByLevel(normalizedTerms) {
-  const total = normalizedTerms.length;
-
-  if (total === 0) {
-    return {
-      [PROFANITY_LEVEL_LOW]: [],
-      [PROFANITY_LEVEL_MEDIUM]: [],
-      [PROFANITY_LEVEL_HIGH]: [],
-    };
-  }
-
-  const highCutoff = Math.ceil(total / 3);
-  const mediumCutoff = Math.ceil((total * 2) / 3);
-
-  return {
-    [PROFANITY_LEVEL_HIGH]: normalizedTerms.slice(0, highCutoff),
-    [PROFANITY_LEVEL_MEDIUM]: normalizedTerms.slice(highCutoff, mediumCutoff),
-    [PROFANITY_LEVEL_LOW]: normalizedTerms.slice(mediumCutoff),
-  };
-}
-
-const normalizedCsvTerms = normalizeTermList(defaultSlangTerms);
-const normalizedDefaultTermsByLevel = splitCsvTermsByLevel(normalizedCsvTerms);
+const normalizedDefaultTermsByLevel = normalizeTermsByLevel(
+  loadDefaultRepresentativeTermsByLevel(),
+);
 
 export function getDefaultProfanityTermsByLevel() {
   return {

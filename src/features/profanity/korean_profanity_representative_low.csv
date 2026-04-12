@@ -1,0 +1,16 @@
+﻿level,term,match_mode,note
+low,씨발,contains,가장 대표적인 욕설
+low,시발,contains,가장 대표적인 욕설
+low,병신,contains,대표적인 직접 비하
+low,븅신,contains,병신 변형
+low,좆,contains,대표적인 성기 기반 욕설 어근
+low,존나,contains,대표적인 강한 비속 부사
+low,새끼,contains,대표적인 직접 비하
+low,개새끼,contains,대표적인 직접 비하
+low,씹새끼,contains,대표적인 직접 비하
+low,지랄,contains,대표적인 공격적 욕설
+low,염병,contains,대표적인 욕설
+low,니애미,contains,대표적인 패드립
+low,느금,contains,대표적인 패드립 축약
+low,쌍년,contains,대표적인 여성 비하 욕설
+low,썅,contains,대표적인 욕설 어근

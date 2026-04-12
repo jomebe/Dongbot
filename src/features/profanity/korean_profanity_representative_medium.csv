@@ -1,0 +1,62 @@
+﻿level,term,match_mode,note
+medium,씨발,contains,가장 대표적인 욕설
+medium,시발,contains,가장 대표적인 욕설
+medium,병신,contains,대표적인 직접 비하
+medium,븅신,contains,병신 변형
+medium,좆,contains,대표적인 성기 기반 욕설 어근
+medium,존나,contains,대표적인 강한 비속 부사
+medium,새끼,contains,대표적인 직접 비하
+medium,개새끼,contains,대표적인 직접 비하
+medium,씹새끼,contains,대표적인 직접 비하
+medium,지랄,contains,대표적인 공격적 욕설
+medium,염병,contains,대표적인 욕설
+medium,니애미,contains,대표적인 패드립
+medium,느금,contains,대표적인 패드립 축약
+medium,쌍년,contains,대표적인 여성 비하 욕설
+medium,썅,contains,대표적인 욕설 어근
+medium,씨벌,contains,씨발 변형
+medium,시벌,contains,시발 변형
+medium,씨부랄,contains,시발 계열 변형
+medium,시부랄,contains,시발 계열 변형
+medium,씨부럴,contains,시발 계열 변형
+medium,시부럴,contains,시발 계열 변형
+medium,씹년,contains,강한 직접 비하
+medium,씹놈,contains,강한 직접 비하
+medium,씹새,contains,씹새끼 계열 어근
+medium,개년,contains,직접 비하
+medium,개놈,contains,직접 비하
+medium,개자식,contains,직접 비하
+medium,호로,contains,직접 비하
+medium,호로새끼,contains,직접 비하
+medium,좆같,contains,좆같다/좆같네 계열
+medium,좆밥,contains,직접 비하
+medium,조까,contains,조까라 계열
+medium,엿먹,contains,엿먹어 계열
+medium,닥쳐,contains,공격적 명령형
+medium,꺼져,contains,공격적 명령형
+medium,미친,contains,광범위 비속 표현
+medium,또라이,contains,비하 표현
+medium,돌아이,contains,또라이 변형
+medium,등신,contains,비하 표현
+medium,머저리,contains,비하 표현
+medium,쪼다,contains,비하 표현
+medium,호구,contains,비하 표현
+medium,찌질,contains,비하 표현
+medium,찐따,contains,비하 표현
+medium,병신새,contains,병신새끼 계열 어근
+medium,븅신새,contains,븅신새끼 계열 어근
+medium,니애비,contains,패드립
+medium,느개비,contains,패드립
+medium,애미뒤,contains,패드립
+medium,애비없,contains,패드립
+medium,애미없,contains,패드립
+medium,씹창,contains,강한 욕설
+medium,씹팔,contains,시발 우회 표기
+medium,시팔,contains,시발 우회 표기
+medium,씨팔,contains,시발 우회 표기
+medium,썅년,contains,욕설 변형
+medium,썅놈,contains,욕설 변형
+medium,개같,contains,개같다 계열
+medium,븅딱,contains,비하 표현
+medium,쳐먹,contains,모욕적 표현
+medium,죽어버,contains,직접적 위해성/모욕 표현
