@@ -206,8 +206,10 @@ const PROFANITY_LEVEL_SET_SUBCOMMAND_NAME = "설정";
 const PROFANITY_ADD_SUBCOMMAND_NAME = "추가";
 const PROFANITY_REMOVE_SUBCOMMAND_NAME = "삭제";
 const PROFANITY_LIST_SUBCOMMAND_NAME = "목록";
-const PROFANITY_LEVEL_OPTION_NAME = "수준";
-const PROFANITY_WORD_LEVEL_OPTION_NAME = "등급";
+const PROFANITY_CATEGORY_OPTION_NAME = "카테고리";
+const PROFANITY_ACTION_OPTION_NAME = "동작";
+const PROFANITY_LEVEL_OPTION_NAME = "등급";
+const PROFANITY_VALUE_OPTION_NAME = "값";
 const PROFANITY_LEVEL_LOW_VALUE = "low";
 const PROFANITY_LEVEL_MEDIUM_VALUE = "medium";
 const PROFANITY_LEVEL_HIGH_VALUE = "high";
@@ -479,167 +481,53 @@ const rolePanelCommand = new SlashCommandBuilder()
 
 const profanityCommand = new SlashCommandBuilder()
   .setName(PROFANITY_COMMAND_NAME)
-  .setDescription("현재 채널 욕설 감지 삭제 기능을 설정합니다")
+  .setDescription("욕설 감지 설정을 옵션으로 실행합니다")
   .setDMPermission(false)
-  .addSubcommandGroup((group) =>
-    group
-      .setName(PROFANITY_CHANNEL_GROUP_NAME)
-      .setDescription("채널별 욕설감지 ON/OFF")
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_ENABLE_SUBCOMMAND_NAME)
-          .setDescription("현재 채널에서 욕설 감지를 켭니다"),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_DISABLE_SUBCOMMAND_NAME)
-          .setDescription("현재 채널에서 욕설 감지를 끕니다"),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_STATUS_SUBCOMMAND_NAME)
-          .setDescription("현재 채널 욕설 감지 상태를 확인합니다"),
+  .addStringOption((option) =>
+    option
+      .setName(PROFANITY_CATEGORY_OPTION_NAME)
+      .setDescription("채널/강도/단어/예외")
+      .setRequired(true)
+      .addChoices(
+        { name: "채널", value: PROFANITY_CHANNEL_GROUP_NAME },
+        { name: "강도", value: PROFANITY_LEVEL_GROUP_NAME },
+        { name: "단어", value: PROFANITY_WORD_GROUP_NAME },
+        { name: "예외", value: PROFANITY_EXCEPTION_GROUP_NAME },
       ),
   )
-  .addSubcommandGroup((group) =>
-    group
-      .setName(PROFANITY_LEVEL_GROUP_NAME)
-      .setDescription("검열 강도를 조절합니다")
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_STATUS_SUBCOMMAND_NAME)
-          .setDescription("현재 검열 강도를 확인합니다"),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_LEVEL_SET_SUBCOMMAND_NAME)
-          .setDescription("검열 강도를 변경합니다")
-          .addStringOption((option) =>
-            option
-              .setName(PROFANITY_LEVEL_OPTION_NAME)
-              .setDescription("낮음/보통/높음")
-              .setRequired(true)
-              .addChoices(
-                {
-                  name: "낮음 (검열 범위 좁음)",
-                  value: PROFANITY_LEVEL_LOW_VALUE,
-                },
-                {
-                  name: "보통 (검열 범위 중간)",
-                  value: PROFANITY_LEVEL_MEDIUM_VALUE,
-                },
-                {
-                  name: "높음 (검열 범위 넓음)",
-                  value: PROFANITY_LEVEL_HIGH_VALUE,
-                },
-              ),
-          ),
+  .addStringOption((option) =>
+    option
+      .setName(PROFANITY_ACTION_OPTION_NAME)
+      .setDescription("켜기/끄기/상태/설정/추가/삭제/목록")
+      .setRequired(true)
+      .addChoices(
+        { name: "켜기", value: PROFANITY_ENABLE_SUBCOMMAND_NAME },
+        { name: "끄기", value: PROFANITY_DISABLE_SUBCOMMAND_NAME },
+        { name: "상태", value: PROFANITY_STATUS_SUBCOMMAND_NAME },
+        { name: "설정", value: PROFANITY_LEVEL_SET_SUBCOMMAND_NAME },
+        { name: "추가", value: PROFANITY_ADD_SUBCOMMAND_NAME },
+        { name: "삭제", value: PROFANITY_REMOVE_SUBCOMMAND_NAME },
+        { name: "목록", value: PROFANITY_LIST_SUBCOMMAND_NAME },
       ),
   )
-  .addSubcommandGroup((group) =>
-    group
-      .setName(PROFANITY_WORD_GROUP_NAME)
-      .setDescription("서버 커스텀 금칙어 관리")
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_ADD_SUBCOMMAND_NAME)
-          .setDescription("금칙어를 추가합니다")
-          .addStringOption((option) =>
-            option
-              .setName("값")
-              .setDescription("추가할 단어")
-              .setRequired(true)
-              .setMinLength(1)
-              .setMaxLength(30),
-          )
-          .addStringOption((option) =>
-            option
-              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
-              .setDescription("낮음/보통/높음 리스트 선택")
-              .setRequired(true)
-              .addChoices(
-                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
-                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
-                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
-              ),
-          ),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_REMOVE_SUBCOMMAND_NAME)
-          .setDescription("금칙어를 삭제합니다")
-          .addStringOption((option) =>
-            option
-              .setName("값")
-              .setDescription("삭제할 단어")
-              .setRequired(true)
-              .setMinLength(1)
-              .setMaxLength(30),
-          )
-          .addStringOption((option) =>
-            option
-              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
-              .setDescription("낮음/보통/높음 리스트 선택")
-              .setRequired(true)
-              .addChoices(
-                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
-                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
-                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
-              ),
-          ),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_LIST_SUBCOMMAND_NAME)
-          .setDescription("등록된 금칙어 목록을 확인합니다")
-          .addStringOption((option) =>
-            option
-              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
-              .setDescription("특정 등급만 보려면 선택")
-              .setRequired(false)
-              .addChoices(
-                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
-                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
-                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
-              ),
-          ),
+  .addStringOption((option) =>
+    option
+      .setName(PROFANITY_LEVEL_OPTION_NAME)
+      .setDescription("등급(낮음/보통/높음)")
+      .setRequired(false)
+      .addChoices(
+        { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
+        { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+        { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
       ),
   )
-  .addSubcommandGroup((group) =>
-    group
-      .setName(PROFANITY_EXCEPTION_GROUP_NAME)
-      .setDescription("감지 예외 단어 관리")
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_ADD_SUBCOMMAND_NAME)
-          .setDescription("예외 단어를 추가합니다")
-          .addStringOption((option) =>
-            option
-              .setName("값")
-              .setDescription("예외 처리할 단어")
-              .setRequired(true)
-              .setMinLength(1)
-              .setMaxLength(30),
-          ),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_REMOVE_SUBCOMMAND_NAME)
-          .setDescription("예외 단어를 삭제합니다")
-          .addStringOption((option) =>
-            option
-              .setName("값")
-              .setDescription("예외 목록에서 삭제할 단어")
-              .setRequired(true)
-              .setMinLength(1)
-              .setMaxLength(30),
-          ),
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName(PROFANITY_LIST_SUBCOMMAND_NAME)
-          .setDescription("등록된 예외 단어 목록을 확인합니다"),
-      ),
+  .addStringOption((option) =>
+    option
+      .setName(PROFANITY_VALUE_OPTION_NAME)
+      .setDescription("추가/삭제할 단어")
+      .setRequired(false)
+      .setMinLength(1)
+      .setMaxLength(30),
   );
 
 client.once("clientReady", async () => {
@@ -3487,17 +3375,22 @@ async function handleRolePanelCommand(interaction) {
 async function handleProfanityCommand(interaction) {
   try {
     const guild = interaction.guild;
-    const rawSubcommandGroup = interaction.options.getSubcommandGroup(false);
-    const rawSubcommand = interaction.options.getSubcommand(false);
-    const fallbackToChannelCategory =
-      !rawSubcommandGroup &&
-      (rawSubcommand === PROFANITY_ENABLE_SUBCOMMAND_NAME ||
-        rawSubcommand === PROFANITY_DISABLE_SUBCOMMAND_NAME ||
-        rawSubcommand === PROFANITY_STATUS_SUBCOMMAND_NAME);
-    const subcommandGroup = fallbackToChannelCategory
-      ? PROFANITY_CHANNEL_GROUP_NAME
-      : rawSubcommandGroup;
-    const subcommand = rawSubcommand;
+    const category = interaction.options.getString(
+      PROFANITY_CATEGORY_OPTION_NAME,
+      true,
+    );
+    const action = interaction.options.getString(
+      PROFANITY_ACTION_OPTION_NAME,
+      true,
+    );
+    const selectedLevel = interaction.options.getString(
+      PROFANITY_LEVEL_OPTION_NAME,
+      false,
+    );
+    const rawValueInput = interaction.options.getString(
+      PROFANITY_VALUE_OPTION_NAME,
+      false,
+    );
 
     if (!guild) {
       await safeInteractionReply(interaction, {
@@ -3507,16 +3400,8 @@ async function handleProfanityCommand(interaction) {
       return;
     }
 
-    if (!subcommandGroup || !subcommand) {
-      await safeInteractionReply(interaction, {
-        content: "알 수 없는 욕설감지 카테고리예요.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
     if (
-      subcommandGroup === PROFANITY_CHANNEL_GROUP_NAME &&
+      category === PROFANITY_CHANNEL_GROUP_NAME &&
       !isProfanityTargetChannel(interaction.channel)
     ) {
       await safeInteractionReply(interaction, {
@@ -3546,10 +3431,10 @@ async function handleProfanityCommand(interaction) {
     const channelMention = `<#${channelId}>`;
     const profanityConfig = await getProfanityConfig(guild.id);
 
-    if (subcommandGroup === PROFANITY_CHANNEL_GROUP_NAME) {
+    if (category === PROFANITY_CHANNEL_GROUP_NAME) {
       const alreadyEnabled = profanityConfig.enabledChannelIds.includes(channelId);
 
-      if (subcommand === PROFANITY_STATUS_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_STATUS_SUBCOMMAND_NAME) {
         await safeInteractionEditReply(interaction, {
           content:
             `${channelMention} 욕설감지 상태: ` +
@@ -3558,7 +3443,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_ENABLE_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_ENABLE_SUBCOMMAND_NAME) {
         if (alreadyEnabled) {
           await safeInteractionEditReply(interaction, {
             content: `${channelMention}은(는) 이미 욕설감지가 켜져 있어요.`,
@@ -3576,7 +3461,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_DISABLE_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_DISABLE_SUBCOMMAND_NAME) {
         if (!alreadyEnabled) {
           await safeInteractionEditReply(interaction, {
             content: `${channelMention}은(는) 이미 욕설감지가 꺼져 있어요.`,
@@ -3593,13 +3478,13 @@ async function handleProfanityCommand(interaction) {
       }
 
       await safeInteractionEditReply(interaction, {
-        content: "알 수 없는 욕설감지 채널 명령어예요.",
+        content: "채널 카테고리에서는 켜기/끄기/상태만 사용할 수 있어요.",
       });
       return;
     }
 
-    if (subcommandGroup === PROFANITY_LEVEL_GROUP_NAME) {
-      if (subcommand === PROFANITY_STATUS_SUBCOMMAND_NAME) {
+    if (category === PROFANITY_LEVEL_GROUP_NAME) {
+      if (action === PROFANITY_STATUS_SUBCOMMAND_NAME) {
         await safeInteractionEditReply(interaction, {
           content:
             "현재 검열 강도: " +
@@ -3608,58 +3493,49 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_LEVEL_SET_SUBCOMMAND_NAME) {
-        const requestedLevel = interaction.options.getString(
-          PROFANITY_LEVEL_OPTION_NAME,
-          true,
-        );
-
-        if (!isProfanityLevelValue(requestedLevel)) {
+      if (action === PROFANITY_LEVEL_SET_SUBCOMMAND_NAME) {
+        if (!isProfanityLevelValue(selectedLevel)) {
           await safeInteractionEditReply(interaction, {
             content: "검열 강도 값이 올바르지 않아요.",
           });
           return;
         }
 
-        if (requestedLevel === profanityConfig.moderationLevel) {
+        if (selectedLevel === profanityConfig.moderationLevel) {
           await safeInteractionEditReply(interaction, {
             content:
               "이미 해당 강도로 설정되어 있어요: " +
-              `${getProfanityLevelLabel(requestedLevel)}`,
+              `${getProfanityLevelLabel(selectedLevel)}`,
           });
           return;
         }
 
         await updateProfanityConfig(guild.id, {
-          moderationLevel: requestedLevel,
+          moderationLevel: selectedLevel,
         });
 
         await safeInteractionEditReply(interaction, {
           content:
             "검열 강도를 변경했어요: " +
-            `${getProfanityLevelLabel(requestedLevel)}`,
+            `${getProfanityLevelLabel(selectedLevel)}`,
         });
         return;
       }
 
       await safeInteractionEditReply(interaction, {
-        content: "알 수 없는 욕설감지 강도 명령어예요.",
+        content: "강도 카테고리에서는 상태/설정만 사용할 수 있어요.",
       });
       return;
     }
 
-    if (subcommandGroup === PROFANITY_WORD_GROUP_NAME) {
-      const selectedLevel = interaction.options.getString(
-        PROFANITY_WORD_LEVEL_OPTION_NAME,
-        subcommand !== PROFANITY_LIST_SUBCOMMAND_NAME,
-      );
+    if (category === PROFANITY_WORD_GROUP_NAME) {
       const defaultTermsByLevel = getDefaultProfanityTermsByLevel();
       const mergedTermsByLevel = buildMergedProfanityTermsByLevel(
         profanityConfig,
         defaultTermsByLevel,
       );
 
-      if (subcommand === PROFANITY_LIST_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_LIST_SUBCOMMAND_NAME) {
         if (!selectedLevel) {
           await safeInteractionEditReply(interaction, {
             content: buildAllProfanityLevelCountsContent(mergedTermsByLevel),
@@ -3687,6 +3563,16 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
+      if (
+        action !== PROFANITY_ADD_SUBCOMMAND_NAME &&
+        action !== PROFANITY_REMOVE_SUBCOMMAND_NAME
+      ) {
+        await safeInteractionEditReply(interaction, {
+          content: "단어 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
+        });
+        return;
+      }
+
       if (!isProfanityLevelValue(selectedLevel)) {
         await safeInteractionEditReply(interaction, {
           content: "수정할 리스트 등급이 올바르지 않아요.",
@@ -3698,8 +3584,14 @@ async function handleProfanityCommand(interaction) {
       const currentTerms = getProfanityTermsByLevel(profanityConfig, selectedLevel);
       const levelLabel = getProfanityLevelLabel(selectedLevel);
 
-      const rawInput = interaction.options.getString("값", true);
-      const normalizedInput = normalizeProfanityTermInput(rawInput);
+      if (!rawValueInput) {
+        await safeInteractionEditReply(interaction, {
+          content: "추가/삭제할 단어를 입력해 주세요.",
+        });
+        return;
+      }
+
+      const normalizedInput = normalizeProfanityTermInput(rawValueInput);
 
       if (!normalizedInput) {
         await safeInteractionEditReply(interaction, {
@@ -3708,7 +3600,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_ADD_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_ADD_SUBCOMMAND_NAME) {
         if (currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
             content:
@@ -3730,7 +3622,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
         if (!currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
             content:
@@ -3755,23 +3647,39 @@ async function handleProfanityCommand(interaction) {
       }
 
       await safeInteractionEditReply(interaction, {
-        content: "알 수 없는 욕설감지 단어 명령어예요.",
+        content: "단어 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
       });
       return;
     }
 
-    if (subcommandGroup === PROFANITY_EXCEPTION_GROUP_NAME) {
+    if (category === PROFANITY_EXCEPTION_GROUP_NAME) {
       const currentTerms = profanityConfig.customAllowedTerms;
 
-      if (subcommand === PROFANITY_LIST_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_LIST_SUBCOMMAND_NAME) {
         await safeInteractionEditReply(interaction, {
           content: buildProfanityListContent("감지 예외 단어", currentTerms),
         });
         return;
       }
 
-      const rawInput = interaction.options.getString("값", true);
-      const normalizedInput = normalizeProfanityTermInput(rawInput);
+      if (
+        action !== PROFANITY_ADD_SUBCOMMAND_NAME &&
+        action !== PROFANITY_REMOVE_SUBCOMMAND_NAME
+      ) {
+        await safeInteractionEditReply(interaction, {
+          content: "예외 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
+        });
+        return;
+      }
+
+      if (!rawValueInput) {
+        await safeInteractionEditReply(interaction, {
+          content: "추가/삭제할 단어를 입력해 주세요.",
+        });
+        return;
+      }
+
+      const normalizedInput = normalizeProfanityTermInput(rawValueInput);
 
       if (!normalizedInput) {
         await safeInteractionEditReply(interaction, {
@@ -3780,7 +3688,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_ADD_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_ADD_SUBCOMMAND_NAME) {
         if (currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
             content: `이미 등록된 예외 단어예요: ${normalizedInput}`,
@@ -3798,7 +3706,7 @@ async function handleProfanityCommand(interaction) {
         return;
       }
 
-      if (subcommand === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
+      if (action === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
         if (!currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
             content: `등록된 예외 단어가 아니에요: ${normalizedInput}`,
@@ -3819,7 +3727,7 @@ async function handleProfanityCommand(interaction) {
       }
 
       await safeInteractionEditReply(interaction, {
-        content: "알 수 없는 욕설감지 예외 명령어예요.",
+        content: "예외 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
       });
       return;
     }
