@@ -835,7 +835,7 @@ async function handleSetupCommand(interaction) {
       ttsGuildConfig,
       autoRoleConfig,
     );
-    const components = buildSetupPanelComponents(
+    const componentRows = buildSetupPanelComponents(
       guild.id,
       loggingConfig,
       roomConfig,
@@ -843,11 +843,29 @@ async function handleSetupCommand(interaction) {
       autoRoleConfig,
     );
 
+    const sectionCount = Math.min(embeds.length, componentRows.length);
+
+    if (sectionCount === 0) {
+      await interaction.reply({
+        content: "초기설정 항목을 불러오지 못했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     await interaction.reply({
-      embeds,
-      components,
+      embeds: [embeds[0]],
+      components: [componentRows[0]],
       flags: MessageFlags.Ephemeral,
     });
+
+    for (let index = 1; index < sectionCount; index += 1) {
+      await interaction.followUp({
+        embeds: [embeds[index]],
+        components: [componentRows[index]],
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   } catch (error) {
     console.error("초기설정 명령어 처리 실패", error);
 
