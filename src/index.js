@@ -481,50 +481,83 @@ const rolePanelCommand = new SlashCommandBuilder()
 
 const profanityCommand = new SlashCommandBuilder()
   .setName(PROFANITY_COMMAND_NAME)
-  .setDescription("욕설 감지 설정을 옵션으로 실행합니다")
+  .setDescription("욕설 감지 설정을 인자로 선택해 실행합니다")
   .setDMPermission(false)
   .addStringOption((option) =>
     option
       .setName(PROFANITY_CATEGORY_OPTION_NAME)
-      .setDescription("채널/강도/단어/예외")
+      .setDescription("무엇을 설정할지 선택")
       .setRequired(true)
       .addChoices(
-        { name: "채널", value: PROFANITY_CHANNEL_GROUP_NAME },
-        { name: "강도", value: PROFANITY_LEVEL_GROUP_NAME },
-        { name: "단어", value: PROFANITY_WORD_GROUP_NAME },
-        { name: "예외", value: PROFANITY_EXCEPTION_GROUP_NAME },
+        {
+          name: "채널 (현재 채널 감지 ON/OFF/상태)",
+          value: PROFANITY_CHANNEL_GROUP_NAME,
+        },
+        {
+          name: "강도 (검열 강도 상태/설정)",
+          value: PROFANITY_LEVEL_GROUP_NAME,
+        },
+        {
+          name: "단어 (금칙어 추가/삭제/목록)",
+          value: PROFANITY_WORD_GROUP_NAME,
+        },
+        {
+          name: "예외 (허용 단어 추가/삭제/목록)",
+          value: PROFANITY_EXCEPTION_GROUP_NAME,
+        },
       ),
   )
   .addStringOption((option) =>
     option
       .setName(PROFANITY_ACTION_OPTION_NAME)
-      .setDescription("켜기/끄기/상태/설정/추가/삭제/목록")
+      .setDescription("카테고리에서 수행할 동작")
       .setRequired(true)
       .addChoices(
-        { name: "켜기", value: PROFANITY_ENABLE_SUBCOMMAND_NAME },
-        { name: "끄기", value: PROFANITY_DISABLE_SUBCOMMAND_NAME },
-        { name: "상태", value: PROFANITY_STATUS_SUBCOMMAND_NAME },
-        { name: "설정", value: PROFANITY_LEVEL_SET_SUBCOMMAND_NAME },
-        { name: "추가", value: PROFANITY_ADD_SUBCOMMAND_NAME },
-        { name: "삭제", value: PROFANITY_REMOVE_SUBCOMMAND_NAME },
-        { name: "목록", value: PROFANITY_LIST_SUBCOMMAND_NAME },
+        {
+          name: "켜기 (채널에서 감지 시작)",
+          value: PROFANITY_ENABLE_SUBCOMMAND_NAME,
+        },
+        {
+          name: "끄기 (채널에서 감지 중지)",
+          value: PROFANITY_DISABLE_SUBCOMMAND_NAME,
+        },
+        {
+          name: "상태 (현재 설정 확인)",
+          value: PROFANITY_STATUS_SUBCOMMAND_NAME,
+        },
+        {
+          name: "설정 (강도값 변경)",
+          value: PROFANITY_LEVEL_SET_SUBCOMMAND_NAME,
+        },
+        {
+          name: "추가 (단어/예외 추가)",
+          value: PROFANITY_ADD_SUBCOMMAND_NAME,
+        },
+        {
+          name: "삭제 (단어/예외 삭제)",
+          value: PROFANITY_REMOVE_SUBCOMMAND_NAME,
+        },
+        {
+          name: "목록 (단어/예외 목록 조회)",
+          value: PROFANITY_LIST_SUBCOMMAND_NAME,
+        },
       ),
   )
   .addStringOption((option) =>
     option
       .setName(PROFANITY_LEVEL_OPTION_NAME)
-      .setDescription("등급(낮음/보통/높음)")
+      .setDescription("강도/단어 리스트 등급 (강도:설정, 단어:추가/삭제/목록)")
       .setRequired(false)
       .addChoices(
-        { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
-        { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
-        { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
+        { name: "낮음 (대표 욕설 중심)", value: PROFANITY_LEVEL_LOW_VALUE },
+        { name: "보통 (변형/비하 포함)", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+        { name: "높음 (성적/집단 비하 포함)", value: PROFANITY_LEVEL_HIGH_VALUE },
       ),
   )
   .addStringOption((option) =>
     option
       .setName(PROFANITY_VALUE_OPTION_NAME)
-      .setDescription("추가/삭제할 단어")
+      .setDescription("추가/삭제할 단어 값 (동작이 추가/삭제일 때 사용)")
       .setRequired(false)
       .setMinLength(1)
       .setMaxLength(30),

@@ -5,12 +5,33 @@ import { db, isFirebaseReady } from "../firebase.js";
 const REACTION_ROLE_PANEL_COLLECTION = "reactionRolePanels";
 const memoryStore = new Map();
 
+function normalizeRoleIds(data = {}) {
+  const uniqueRoleIds = new Set();
+
+  if (Array.isArray(data.roleIds)) {
+    for (const roleId of data.roleIds) {
+      if (typeof roleId === "string" && roleId.trim()) {
+        uniqueRoleIds.add(roleId);
+      }
+    }
+  }
+
+  if (typeof data.roleId === "string" && data.roleId.trim()) {
+    uniqueRoleIds.add(data.roleId);
+  }
+
+  return [...uniqueRoleIds];
+}
+
 function normalizePanel(messageId, data = {}) {
+  const roleIds = normalizeRoleIds(data);
+
   return {
     messageId,
     guildId: typeof data.guildId === "string" ? data.guildId : null,
     channelId: typeof data.channelId === "string" ? data.channelId : null,
-    roleId: typeof data.roleId === "string" ? data.roleId : null,
+    roleId: roleIds[0] ?? null,
+    roleIds,
     emojiId: typeof data.emojiId === "string" ? data.emojiId : null,
     emojiName: typeof data.emojiName === "string" ? data.emojiName : null,
     createdByUserId:
