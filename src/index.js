@@ -77,6 +77,10 @@ import {
   updateAutoRoleConfig,
 } from "./store/autoRoleConfigStore.js";
 import {
+  isProfanityChannelEnabled,
+  setProfanityChannelEnabled,
+} from "./store/profanityConfigStore.js";
+import {
   createReactionRolePanel,
   getReactionRolePanel,
   removeReactionRolePanel,
@@ -118,6 +122,9 @@ import {
   parseQueueLimitInput,
   parseQueueTimeoutInput,
 } from "./features/queue/queueUtils.js";
+import {
+  containsProfanity,
+} from "./features/profanity/profanityUtils.js";
 import {
   safeDeferEphemeral,
   safeInteractionDeleteReply,
@@ -178,6 +185,10 @@ const SETUP_AUTO_ROLE_SETTINGS_BUTTON_PREFIX =
 const SETUP_AUTO_ROLE_ROLE_PREFIX = "dongbot:setup-autorole-role:";
 const ROLE_PANEL_COMMAND_NAME = "역할지급";
 const ROLE_PANEL_CREATE_SUBCOMMAND_NAME = "패널생성";
+const PROFANITY_COMMAND_NAME = "욕설감지";
+const PROFANITY_ENABLE_SUBCOMMAND_NAME = "켜기";
+const PROFANITY_DISABLE_SUBCOMMAND_NAME = "끄기";
+const PROFANITY_STATUS_SUBCOMMAND_NAME = "상태";
 const MAX_TTS_TEXT_LENGTH = 180;
 const DEFAULT_TTS_TEST_TEXT = "테스트 메시지입니다. 지금 읽히면 TTS가 정상 동작 중입니다.";
 const TTS_PLAYBACK_START_TIMEOUT_MS = 15_000;
@@ -419,6 +430,26 @@ const rolePanelCommand = new SlashCommandBuilder()
       ),
   );
 
+const profanityCommand = new SlashCommandBuilder()
+  .setName(PROFANITY_COMMAND_NAME)
+  .setDescription("현재 채널 욕설 감지 삭제 기능을 설정합니다")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(PROFANITY_ENABLE_SUBCOMMAND_NAME)
+      .setDescription("현재 채널에서 욕설 감지를 켭니다"),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(PROFANITY_DISABLE_SUBCOMMAND_NAME)
+      .setDescription("현재 채널에서 욕설 감지를 끕니다"),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(PROFANITY_STATUS_SUBCOMMAND_NAME)
+      .setDescription("현재 채널 욕설 감지 상태를 확인합니다"),
+  );
+
 client.once("clientReady", async () => {
   console.log(`동봇 로그인 완료: ${client.user.tag}`);
   await registerAllGuildCommands();
@@ -476,6 +507,11 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === ROLE_PANEL_COMMAND_NAME) {
         await handleRolePanelCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === PROFANITY_COMMAND_NAME) {
+        await handleProfanityCommand(interaction);
         return;
       }
 
@@ -638,9 +674,15 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
 client.on("messageCreate", async (message) => {
   try {
+    const wasDeletedByModeration = await handleProfanityModerationMessage(message);
+
+    if (wasDeletedByModeration) {
+      return;
+    }
+
     await handleTtsMessage(message);
   } catch (error) {
-    console.error("TTS 메시지 처리 실패", error);
+    console.error("메시지 처리 실패", error);
   }
 });
 
@@ -798,6 +840,7 @@ async function registerGuildCommands(guild) {
     pollCommand.toJSON(),
     queueCommand.toJSON(),
     rolePanelCommand.toJSON(),
+    profanityCommand.toJSON(),
   ]);
 }
 
@@ -3176,6 +3219,161 @@ async function handleRolePanelCommand(interaction) {
       });
     }
   }
+}
+
+async function handleProfanityCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!isProfanityTargetChannel(interaction.channel)) {
+      await safeInteractionReply(interaction, {
+        content: "욕설감지는 텍스트 채널에서만 설정할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const hasAdminPermission = await isAdminUser(guild, interaction.user.id);
+
+    if (!hasAdminPermission) {
+      await safeInteractionReply(interaction, {
+        content: "서버 관리자만 욕설감지 설정을 변경할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const channelId = interaction.channelId;
+    const channelMention = `<#${channelId}>`;
+    const subcommand = interaction.options.getSubcommand();
+    const alreadyEnabled = await isProfanityChannelEnabled(guild.id, channelId);
+
+    if (subcommand === PROFANITY_STATUS_SUBCOMMAND_NAME) {
+      await safeInteractionEditReply(interaction, {
+        content:
+          `${channelMention} 욕설감지 상태: ` +
+          `${alreadyEnabled ? "켜짐" : "꺼짐"}`,
+      });
+      return;
+    }
+
+    if (subcommand === PROFANITY_ENABLE_SUBCOMMAND_NAME) {
+      if (alreadyEnabled) {
+        await safeInteractionEditReply(interaction, {
+          content: `${channelMention}은(는) 이미 욕설감지가 켜져 있어요.`,
+        });
+        return;
+      }
+
+      await setProfanityChannelEnabled(guild.id, channelId, true);
+
+      await safeInteractionEditReply(interaction, {
+        content:
+          `${channelMention}에서 욕설감지를 켰어요. ` +
+          "감지된 메시지는 바로 삭제됩니다.",
+      });
+      return;
+    }
+
+    if (subcommand === PROFANITY_DISABLE_SUBCOMMAND_NAME) {
+      if (!alreadyEnabled) {
+        await safeInteractionEditReply(interaction, {
+          content: `${channelMention}은(는) 이미 욕설감지가 꺼져 있어요.`,
+        });
+        return;
+      }
+
+      await setProfanityChannelEnabled(guild.id, channelId, false);
+
+      await safeInteractionEditReply(interaction, {
+        content: `${channelMention}에서 욕설감지를 껐어요.`,
+      });
+      return;
+    }
+
+    await safeInteractionEditReply(interaction, {
+      content: "알 수 없는 욕설감지 명령어예요.",
+    });
+  } catch (error) {
+    console.error("욕설감지 명령어 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "욕설감지 명령어 처리 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: "욕설감지 명령어 처리 중 오류가 발생했어요.",
+      });
+    }
+  }
+}
+
+function isProfanityTargetChannel(channel) {
+  return (
+    channel?.type === ChannelType.GuildText ||
+    channel?.type === ChannelType.GuildAnnouncement
+  );
+}
+
+async function handleProfanityModerationMessage(message) {
+  if (!message.guild || message.author.bot || !message.content) {
+    return false;
+  }
+
+  if (!isProfanityTargetChannel(message.channel)) {
+    return false;
+  }
+
+  const isEnabled = await isProfanityChannelEnabled(
+    message.guild.id,
+    message.channelId,
+  );
+
+  if (!isEnabled) {
+    return false;
+  }
+
+  if (!containsProfanity(message.content)) {
+    return false;
+  }
+
+  const me =
+    message.guild.members.me ??
+    (await message.guild.members.fetchMe().catch(() => null));
+
+  if (!me) {
+    return false;
+  }
+
+  const canDeleteMessage = message.channel.permissionsFor(me)?.has(
+    PermissionFlagsBits.ManageMessages,
+  );
+
+  if (!canDeleteMessage) {
+    return false;
+  }
+
+  await message.delete().catch(() => null);
+  return true;
 }
 
 async function handleAutoRoleOnMemberJoin(member) {
