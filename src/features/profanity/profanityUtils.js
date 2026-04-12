@@ -154,6 +154,20 @@ function splitCsvTermsByLevel(normalizedTerms) {
 const normalizedCsvTerms = normalizeTermList(defaultSlangTerms);
 const normalizedDefaultTermsByLevel = splitCsvTermsByLevel(normalizedCsvTerms);
 
+export function getDefaultProfanityTermsByLevel() {
+  return {
+    [PROFANITY_LEVEL_LOW]: [
+      ...normalizedDefaultTermsByLevel[PROFANITY_LEVEL_LOW],
+    ],
+    [PROFANITY_LEVEL_MEDIUM]: [
+      ...normalizedDefaultTermsByLevel[PROFANITY_LEVEL_MEDIUM],
+    ],
+    [PROFANITY_LEVEL_HIGH]: [
+      ...normalizedDefaultTermsByLevel[PROFANITY_LEVEL_HIGH],
+    ],
+  };
+}
+
 export function detectProfanity(content, options = {}) {
   const normalizedContent = normalizeForProfanityDetection(content);
 

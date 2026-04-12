@@ -125,6 +125,7 @@ import {
 } from "./features/queue/queueUtils.js";
 import {
   containsProfanity,
+  getDefaultProfanityTermsByLevel,
 } from "./features/profanity/profanityUtils.js";
 import {
   safeDeferEphemeral,
@@ -3603,11 +3604,17 @@ async function handleProfanityCommand(interaction) {
         PROFANITY_WORD_LEVEL_OPTION_NAME,
         subcommand !== PROFANITY_LIST_SUBCOMMAND_NAME,
       );
+      const defaultTermsByLevel = getDefaultProfanityTermsByLevel();
+      const mergedTermsByLevel = buildMergedProfanityTermsByLevel(
+        profanityConfig,
+        defaultTermsByLevel,
+      );
 
       if (subcommand === PROFANITY_LIST_SUBCOMMAND_NAME) {
         if (!selectedLevel) {
           await safeInteractionEditReply(interaction, {
-            content: buildAllProfanityLevelListsContent(profanityConfig),
+            content: buildAllProfanityLevelCountsContent(mergedTermsByLevel),
+            files: [buildAllProfanityTermsAttachment(mergedTermsByLevel)],
           });
           return;
         }
@@ -3619,16 +3626,14 @@ async function handleProfanityCommand(interaction) {
           return;
         }
 
-        const targetTerms = getProfanityTermsByLevel(
-          profanityConfig,
-          selectedLevel,
-        );
+        const targetTerms = mergedTermsByLevel[selectedLevel] ?? [];
 
         await safeInteractionEditReply(interaction, {
           content: buildProfanityListContent(
-            `${getProfanityLevelLabel(selectedLevel)} 금칙어 리스트`,
+            `${getProfanityLevelLabel(selectedLevel)} 금칙어 리스트 (CSV+커스텀)`,
             targetTerms,
           ),
+          files: [buildProfanityTermsAttachment(selectedLevel, targetTerms)],
         });
         return;
       }
@@ -3844,6 +3849,94 @@ function getProfanityTermsByLevel(config, level) {
   }
 
   return config[fieldName];
+}
+
+function mergeProfanityTermLists(...termLists) {
+  const uniqueTerms = new Set();
+
+  for (const termList of termLists) {
+    if (!Array.isArray(termList)) {
+      continue;
+    }
+
+    for (const term of termList) {
+      if (typeof term === "string" && term.trim()) {
+        uniqueTerms.add(term);
+      }
+    }
+  }
+
+  return [...uniqueTerms];
+}
+
+function buildMergedProfanityTermsByLevel(config, defaultTermsByLevel) {
+  return {
+    [PROFANITY_LEVEL_LOW_VALUE]: mergeProfanityTermLists(
+      defaultTermsByLevel?.[PROFANITY_LEVEL_LOW_VALUE],
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_LOW_VALUE),
+    ),
+    [PROFANITY_LEVEL_MEDIUM_VALUE]: mergeProfanityTermLists(
+      defaultTermsByLevel?.[PROFANITY_LEVEL_MEDIUM_VALUE],
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_MEDIUM_VALUE),
+    ),
+    [PROFANITY_LEVEL_HIGH_VALUE]: mergeProfanityTermLists(
+      defaultTermsByLevel?.[PROFANITY_LEVEL_HIGH_VALUE],
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_HIGH_VALUE),
+    ),
+  };
+}
+
+function buildAllProfanityLevelCountsContent(termsByLevel) {
+  const lowTerms = termsByLevel?.[PROFANITY_LEVEL_LOW_VALUE] ?? [];
+  const mediumTerms = termsByLevel?.[PROFANITY_LEVEL_MEDIUM_VALUE] ?? [];
+  const highTerms = termsByLevel?.[PROFANITY_LEVEL_HIGH_VALUE] ?? [];
+
+  return [
+    "CSV 기본 단어 + 서버 커스텀 단어를 합친 목록입니다.",
+    `낮음: ${lowTerms.length}개`,
+    `보통: ${mediumTerms.length}개`,
+    `높음: ${highTerms.length}개`,
+    "전체 단어 파일을 첨부했어요.",
+  ].join("\n");
+}
+
+function buildProfanityTermsAttachment(level, terms) {
+  const label = getProfanityLevelLabel(level);
+  const lines = [
+    `${label} 금칙어 리스트 (CSV+커스텀)`,
+    `총 ${terms.length}개`,
+    "",
+    ...terms,
+  ];
+
+  return {
+    attachment: Buffer.from(lines.join("\n"), "utf8"),
+    name: `profanity-words-${level}.txt`,
+  };
+}
+
+function buildAllProfanityTermsAttachment(termsByLevel) {
+  const lowTerms = termsByLevel?.[PROFANITY_LEVEL_LOW_VALUE] ?? [];
+  const mediumTerms = termsByLevel?.[PROFANITY_LEVEL_MEDIUM_VALUE] ?? [];
+  const highTerms = termsByLevel?.[PROFANITY_LEVEL_HIGH_VALUE] ?? [];
+
+  const lines = [
+    "전체 금칙어 리스트 (CSV+커스텀)",
+    "",
+    `낮음 (${lowTerms.length}개)`,
+    ...lowTerms,
+    "",
+    `보통 (${mediumTerms.length}개)`,
+    ...mediumTerms,
+    "",
+    `높음 (${highTerms.length}개)`,
+    ...highTerms,
+  ];
+
+  return {
+    attachment: Buffer.from(lines.join("\n"), "utf8"),
+    name: "profanity-words-all.txt",
+  };
 }
 
 function buildAllProfanityLevelListsContent(config) {
