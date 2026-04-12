@@ -36,6 +36,24 @@ function normalizeForProfanityDetection(content) {
     .replace(/[^\p{L}]+/gu, "");
 }
 
+function normalizeTermList(rawTerms) {
+  if (!Array.isArray(rawTerms)) {
+    return [];
+  }
+
+  const uniqueTerms = new Set();
+
+  for (const rawTerm of rawTerms) {
+    const normalized = normalizeForProfanityDetection(rawTerm);
+
+    if (normalized) {
+      uniqueTerms.add(normalized);
+    }
+  }
+
+  return [...uniqueTerms];
+}
+
 const normalizedProfanityTerms = PROFANITY_TERMS
   .map((term) => normalizeForProfanityDetection(term))
   .filter(Boolean);
@@ -51,20 +69,28 @@ const obfuscatedEnglishPatterns = [
   /a[\W_]*s[\W_]*s[\W_]*h[\W_]*o[\W_]*l[\W_]*e+/i,
 ];
 
-export function detectProfanity(content) {
+export function detectProfanity(content, options = {}) {
   const normalizedContent = normalizeForProfanityDetection(content);
 
   if (!normalizedContent) {
     return null;
   }
 
-  for (const exclusionPhrase of normalizedExclusionPhrases) {
+  const dynamicTerms = normalizeTermList(options.extraTerms);
+  const dynamicExclusionPhrases = normalizeTermList(options.exclusionPhrases);
+  const allExclusionPhrases = [
+    ...normalizedExclusionPhrases,
+    ...dynamicExclusionPhrases,
+  ];
+  const allProfanityTerms = [...normalizedProfanityTerms, ...dynamicTerms];
+
+  for (const exclusionPhrase of allExclusionPhrases) {
     if (exclusionPhrase && normalizedContent.includes(exclusionPhrase)) {
       return null;
     }
   }
 
-  for (const profanityTerm of normalizedProfanityTerms) {
+  for (const profanityTerm of allProfanityTerms) {
     if (normalizedContent.includes(profanityTerm)) {
       return profanityTerm;
     }
@@ -81,6 +107,6 @@ export function detectProfanity(content) {
   return null;
 }
 
-export function containsProfanity(content) {
-  return Boolean(detectProfanity(content));
+export function containsProfanity(content, options = {}) {
+  return Boolean(detectProfanity(content, options));
 }

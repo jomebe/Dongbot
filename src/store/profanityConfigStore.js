@@ -5,6 +5,20 @@ import { db, isFirebaseReady } from "../firebase.js";
 const PROFANITY_CONFIG_COLLECTION = "profanityConfigs";
 const memoryStore = new Map();
 
+function normalizeKeyword(rawKeyword) {
+  if (typeof rawKeyword !== "string") {
+    return null;
+  }
+
+  const normalized = rawKeyword
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}]+/gu, "")
+    .trim();
+
+  return normalized || null;
+}
+
 function normalizeEnabledChannelIds(rawChannelIds) {
   if (!Array.isArray(rawChannelIds)) {
     return [];
@@ -21,10 +35,30 @@ function normalizeEnabledChannelIds(rawChannelIds) {
   return [...uniqueChannelIds];
 }
 
+function normalizeKeywordList(rawKeywords) {
+  if (!Array.isArray(rawKeywords)) {
+    return [];
+  }
+
+  const uniqueKeywords = new Set();
+
+  for (const rawKeyword of rawKeywords) {
+    const normalized = normalizeKeyword(rawKeyword);
+
+    if (normalized) {
+      uniqueKeywords.add(normalized);
+    }
+  }
+
+  return [...uniqueKeywords];
+}
+
 function normalizeConfig(guildId, data = {}) {
   return {
     guildId,
     enabledChannelIds: normalizeEnabledChannelIds(data.enabledChannelIds),
+    customBlockedTerms: normalizeKeywordList(data.customBlockedTerms),
+    customAllowedTerms: normalizeKeywordList(data.customAllowedTerms),
   };
 }
 
