@@ -1,0 +1,13 @@
+export const QUEUE_COMMAND_NAME = "선착";
+export const QUEUE_CREATE_SUBCOMMAND_NAME = "생성";
+export const QUEUE_STATUS_SUBCOMMAND_NAME = "현황";
+export const QUEUE_CREATE_MODAL_PREFIX = "dongbot:queue-create:";
+export const QUEUE_BUTTON_PREFIX = "dongbot:queue:";
+export const QUEUE_TITLE_FIELD_ID = "queue-title";
+export const QUEUE_LIMIT_FIELD_ID = "queue-limit";
+export const QUEUE_TIMEOUT_FIELD_ID = "queue-timeout-minutes";
+export const QUEUE_NOTE_FIELD_ID = "queue-note";
+export const QUEUE_MIN_LIMIT = 2;
+export const QUEUE_MAX_LIMIT = 101;
+export const QUEUE_MIN_TIMEOUT_MINUTES = 1;
+export const QUEUE_MAX_TIMEOUT_MINUTES = 720;

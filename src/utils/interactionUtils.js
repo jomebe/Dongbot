@@ -30,6 +30,19 @@ export async function safeInteractionEditReply(interaction, payload) {
   }
 }
 
+export async function safeInteractionDeleteReply(interaction) {
+  try {
+    await interaction.deleteReply();
+    return true;
+  } catch (error) {
+    if (isIgnorableInteractionError(error)) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 export async function safeDeferEphemeral(interaction) {
   if (interaction.deferred || interaction.replied) {
     return true;

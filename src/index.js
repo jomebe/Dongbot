@@ -24,6 +24,7 @@ import {
   ModalBuilder,
   Partials,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   SlashCommandBuilder,
@@ -66,6 +67,21 @@ import {
   savePollRecord,
 } from "./store/pollStore.js";
 import {
+  createQueueRecord,
+  getOpenQueueByGuildId,
+  getQueueRecord,
+  saveQueueRecord,
+} from "./store/queueStore.js";
+import {
+  getAutoRoleConfig,
+  updateAutoRoleConfig,
+} from "./store/autoRoleConfigStore.js";
+import {
+  createReactionRolePanel,
+  getReactionRolePanel,
+  removeReactionRolePanel,
+} from "./store/reactionRoleStore.js";
+import {
   POLL_BUTTON_PREFIX,
   POLL_COMMAND_NAME,
   POLL_CREATE_MODAL_PREFIX,
@@ -75,6 +91,17 @@ import {
   POLL_VISIBILITY_PUBLIC,
 } from "./features/poll/pollConstants.js";
 import {
+  QUEUE_BUTTON_PREFIX,
+  QUEUE_COMMAND_NAME,
+  QUEUE_CREATE_SUBCOMMAND_NAME,
+  QUEUE_CREATE_MODAL_PREFIX,
+  QUEUE_LIMIT_FIELD_ID,
+  QUEUE_NOTE_FIELD_ID,
+  QUEUE_STATUS_SUBCOMMAND_NAME,
+  QUEUE_TIMEOUT_FIELD_ID,
+  QUEUE_TITLE_FIELD_ID,
+} from "./features/queue/queueConstants.js";
+import {
   buildPollMessagePayload,
   buildPollStatusEmbed,
   createPollId,
@@ -83,7 +110,17 @@ import {
   parsePollOptionsInput,
 } from "./features/poll/pollUtils.js";
 import {
+  buildQueueMessagePayload,
+  buildQueueStatusEmbed,
+  createQueueId,
+  isQueueTextChannel,
+  parseQueueCreateModalCustomId,
+  parseQueueLimitInput,
+  parseQueueTimeoutInput,
+} from "./features/queue/queueUtils.js";
+import {
   safeDeferEphemeral,
+  safeInteractionDeleteReply,
   safeInteractionEditReply,
   safeInteractionReply,
 } from "./utils/interactionUtils.js";
@@ -94,12 +131,14 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Message, Partials.Channel],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 const guildTaskQueue = new Map();
+const queueTimeoutJobs = new Map();
 
 const ROOM_SETUP_BUTTON_PREFIX = "dongbot:room-setup:";
 const ROOM_CATEGORY_SELECT_PREFIX = "dongbot:room-category:";
@@ -115,17 +154,30 @@ const SETUP_CHAT_LOG_CHANNEL_PREFIX = "dongbot:setup-chatlog-channel:";
 const SETUP_LOGS_BOOTSTRAP_PREFIX = "dongbot:setup-logs-bootstrap:";
 const SETUP_ROOM_ENABLE_PREFIX = "dongbot:setup-room-enable:";
 const SETUP_ROOM_DISABLE_PREFIX = "dongbot:setup-room-disable:";
+const SETUP_ROOM_SETTINGS_BUTTON_PREFIX = "dongbot:setup-room-settings-open:";
 const SETUP_ROOM_CATEGORY_PREFIX = "dongbot:setup-room-category:";
 const SETUP_JOIN_LEAVE_ENABLE_PREFIX = "dongbot:setup-joinleave-enable:";
 const SETUP_JOIN_LEAVE_DISABLE_PREFIX = "dongbot:setup-joinleave-disable:";
+const SETUP_JOIN_LEAVE_SETTINGS_BUTTON_PREFIX =
+  "dongbot:setup-joinleave-settings-open:";
 const SETUP_JOIN_LEAVE_CHANNEL_PREFIX = "dongbot:setup-joinleave-channel:";
 const SETUP_JOIN_LEAVE_ALERT_BUTTON_PREFIX =
   "dongbot:setup-joinleave-alert-open:";
 const SETUP_JOIN_LEAVE_ALERT_MODAL_PREFIX =
   "dongbot:setup-joinleave-alert-modal:";
+const SETUP_CHAT_LOG_SETTINGS_BUTTON_PREFIX =
+  "dongbot:setup-chatlog-settings-open:";
 const SETUP_TTS_MODE_CHANNEL_PREFIX = "dongbot:setup-tts-mode-channel:";
 const SETUP_TTS_MODE_GUILD_PREFIX = "dongbot:setup-tts-mode-guild:";
+const SETUP_TTS_SETTINGS_BUTTON_PREFIX = "dongbot:setup-tts-settings-open:";
 const SETUP_TTS_CHANNEL_PREFIX = "dongbot:setup-tts-channel:";
+const SETUP_AUTO_ROLE_ENABLE_PREFIX = "dongbot:setup-autorole-enable:";
+const SETUP_AUTO_ROLE_DISABLE_PREFIX = "dongbot:setup-autorole-disable:";
+const SETUP_AUTO_ROLE_SETTINGS_BUTTON_PREFIX =
+  "dongbot:setup-autorole-settings-open:";
+const SETUP_AUTO_ROLE_ROLE_PREFIX = "dongbot:setup-autorole-role:";
+const ROLE_PANEL_COMMAND_NAME = "역할지급";
+const ROLE_PANEL_CREATE_SUBCOMMAND_NAME = "패널생성";
 const MAX_TTS_TEXT_LENGTH = 180;
 const DEFAULT_TTS_TEST_TEXT = "테스트 메시지입니다. 지금 읽히면 TTS가 정상 동작 중입니다.";
 const TTS_PLAYBACK_START_TIMEOUT_MS = 15_000;
@@ -300,6 +352,73 @@ const pollCommand = new SlashCommandBuilder()
       ),
   );
 
+const queueCommand = new SlashCommandBuilder()
+  .setName(QUEUE_COMMAND_NAME)
+  .setDescription("선착순 기능")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(QUEUE_CREATE_SUBCOMMAND_NAME)
+      .setDescription("선착순 모집을 생성합니다")
+      .addRoleOption((option) =>
+        option
+          .setName("멘션역할")
+          .setDescription("모집 시작 시 멘션할 역할 (선택)")
+          .setRequired(false),
+      ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(QUEUE_STATUS_SUBCOMMAND_NAME)
+      .setDescription("현재 진행 중인 선착순 현황을 확인합니다"),
+  );
+
+const rolePanelCommand = new SlashCommandBuilder()
+  .setName(ROLE_PANEL_COMMAND_NAME)
+  .setDescription("반응으로 역할을 지급하는 패널을 만듭니다")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(ROLE_PANEL_CREATE_SUBCOMMAND_NAME)
+      .setDescription("특정 채널에 반응 역할 패널 생성")
+      .addChannelOption((option) =>
+        option
+          .setName("채널")
+          .setDescription("패널을 보낼 채널")
+          .setRequired(true)
+          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
+      )
+      .addRoleOption((option) =>
+        option
+          .setName("역할")
+          .setDescription("반응 시 지급할 역할")
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("이모지")
+          .setDescription("반응 이모지 (기본: ✅)")
+          .setRequired(false)
+          .setMaxLength(32),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("제목")
+          .setDescription("패널 제목")
+          .setRequired(false)
+          .setMinLength(1)
+          .setMaxLength(80),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("안내")
+          .setDescription("패널 안내 문구")
+          .setRequired(false)
+          .setMinLength(1)
+          .setMaxLength(300),
+      ),
+  );
+
 client.once("clientReady", async () => {
   console.log(`동봇 로그인 완료: ${client.user.tag}`);
   await registerAllGuildCommands();
@@ -340,6 +459,24 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === POLL_COMMAND_NAME) {
         await handlePollCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === QUEUE_COMMAND_NAME) {
+        const subcommand = interaction.options.getSubcommand();
+
+        if (subcommand === QUEUE_STATUS_SUBCOMMAND_NAME) {
+          await handleQueueStatusCommand(interaction);
+          return;
+        }
+
+        await handleQueueCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === ROLE_PANEL_COMMAND_NAME) {
+        await handleRolePanelCommand(interaction);
+        return;
       }
 
       return;
@@ -351,12 +488,22 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
+      if (interaction.customId.startsWith(QUEUE_CREATE_MODAL_PREFIX)) {
+        await handleQueueCreateModalSubmit(interaction);
+        return;
+      }
+
       if (
         interaction.customId.startsWith(SETUP_JOIN_LEAVE_ALERT_MODAL_PREFIX)
       ) {
         await handleJoinLeaveAlertModalSubmit(interaction);
       }
 
+      return;
+    }
+
+    if (interaction.isRoleSelectMenu()) {
+      await handleSetupRoleSelectInteraction(interaction);
       return;
     }
 
@@ -373,6 +520,11 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
+      if (customId.startsWith(QUEUE_BUTTON_PREFIX)) {
+        await handleQueueButtonInteraction(interaction);
+        return;
+      }
+
       if (
         customId.startsWith(SETUP_TTS_MODE_CHANNEL_PREFIX) ||
         customId.startsWith(SETUP_TTS_MODE_GUILD_PREFIX)
@@ -384,11 +536,18 @@ client.on("interactionCreate", async (interaction) => {
       if (
         customId.startsWith(SETUP_ROOM_ENABLE_PREFIX) ||
         customId.startsWith(SETUP_ROOM_DISABLE_PREFIX) ||
+        customId.startsWith(SETUP_ROOM_SETTINGS_BUTTON_PREFIX) ||
         customId.startsWith(SETUP_LOGS_BOOTSTRAP_PREFIX) ||
+        customId.startsWith(SETUP_CHAT_LOG_SETTINGS_BUTTON_PREFIX) ||
         customId.startsWith(SETUP_CHAT_LOG_ENABLE_PREFIX) ||
         customId.startsWith(SETUP_CHAT_LOG_DISABLE_PREFIX) ||
         customId.startsWith(SETUP_JOIN_LEAVE_ENABLE_PREFIX) ||
         customId.startsWith(SETUP_JOIN_LEAVE_DISABLE_PREFIX) ||
+        customId.startsWith(SETUP_JOIN_LEAVE_SETTINGS_BUTTON_PREFIX) ||
+        customId.startsWith(SETUP_TTS_SETTINGS_BUTTON_PREFIX) ||
+        customId.startsWith(SETUP_AUTO_ROLE_ENABLE_PREFIX) ||
+        customId.startsWith(SETUP_AUTO_ROLE_DISABLE_PREFIX) ||
+        customId.startsWith(SETUP_AUTO_ROLE_SETTINGS_BUTTON_PREFIX) ||
         customId.startsWith(SETUP_JOIN_LEAVE_ALERT_BUTTON_PREFIX)
       ) {
         await handleSetupButtonInteraction(interaction);
@@ -485,9 +644,34 @@ client.on("messageCreate", async (message) => {
   }
 });
 
+client.on("guildMemberAdd", async (member) => {
+  try {
+    await handleAutoRoleOnMemberJoin(member);
+  } catch (error) {
+    console.error("자동 역할 지급 실패", error);
+  }
+});
+
+client.on("messageReactionAdd", async (reaction, user) => {
+  try {
+    await handleReactionRoleToggle(reaction, user, true);
+  } catch (error) {
+    console.error("반응 역할 지급 실패", error);
+  }
+});
+
+client.on("messageReactionRemove", async (reaction, user) => {
+  try {
+    await handleReactionRoleToggle(reaction, user, false);
+  } catch (error) {
+    console.error("반응 역할 해제 실패", error);
+  }
+});
+
 client.on("messageDelete", async (message) => {
   try {
     await handleMessageDeleteLog(message);
+    await removeReactionRolePanel(message.id);
   } catch (error) {
     console.error("채팅 삭제 로그 처리 실패", error);
   }
@@ -612,6 +796,8 @@ async function registerGuildCommands(guild) {
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
     pollCommand.toJSON(),
+    queueCommand.toJSON(),
+    rolePanelCommand.toJSON(),
   ]);
 }
 
@@ -637,23 +823,29 @@ async function handleSetupCommand(interaction) {
       return;
     }
 
-    const [loggingConfig, roomConfig, ttsGuildConfig] = await Promise.all([
+    const [loggingConfig, roomConfig, ttsGuildConfig, autoRoleConfig] = await Promise.all([
       getLoggingConfig(guild.id),
       getGuildConfig(guild.id),
       getTtsGuildConfig(guild.id),
+      getAutoRoleConfig(guild.id),
     ]);
-    const embed = buildSetupEmbed(loggingConfig, roomConfig);
-    const components = buildSetupPanelComponents(guild.id, loggingConfig, roomConfig);
+    const embeds = buildSetupEmbeds(
+      loggingConfig,
+      roomConfig,
+      ttsGuildConfig,
+      autoRoleConfig,
+    );
+    const components = buildSetupPanelComponents(
+      guild.id,
+      loggingConfig,
+      roomConfig,
+      ttsGuildConfig,
+      autoRoleConfig,
+    );
 
     await interaction.reply({
-      embeds: [embed],
+      embeds,
       components,
-      flags: MessageFlags.Ephemeral,
-    });
-
-    await interaction.followUp({
-      embeds: [buildTtsSetupEmbed(ttsGuildConfig)],
-      components: buildTtsSetupComponents(guild.id, ttsGuildConfig),
       flags: MessageFlags.Ephemeral,
     });
   } catch (error) {
@@ -668,138 +860,196 @@ async function handleSetupCommand(interaction) {
   }
 }
 
-function buildTtsSetupEmbed(ttsGuildConfig) {
-  const modeSummary =
-    ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_CHANNEL
-      ? "전용 채팅방 모드"
-      : ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_GUILD
-        ? "자유 모드(어디서든)"
-        : "미설정";
-
-  const channelSummary = ttsGuildConfig.textChannelId
-    ? `<#${ttsGuildConfig.textChannelId}>`
-    : "미지정";
-
-  return new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle("TTS 입력 방식 설정")
-    .setDescription(
-      [
-        "여기서 TTS 입력 방식을 한 번 설정하면, 이후 `/tts O`는 설정된 방식으로 바로 켜져요.",
-        "- 전용 채팅방 모드: 특정 채팅방 메시지만 읽기",
-        "- 자유 모드: 서버 채팅방 어디서든 읽기",
-      ].join("\n"),
-    )
-    .addFields(
-      {
-        name: "현재 모드",
-        value: modeSummary,
-        inline: true,
-      },
-      {
-        name: "전용 TTS 채팅방",
-        value: channelSummary,
-        inline: true,
-      },
-    );
-}
-
-function buildTtsSetupComponents(guildId, ttsGuildConfig) {
-  const modeRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_TTS_MODE_CHANNEL_PREFIX}${guildId}`)
-      .setLabel("전용 채팅방 모드")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_TTS_MODE_GUILD_PREFIX}${guildId}`)
-      .setLabel("자유 모드(어디서든)")
-      .setStyle(ButtonStyle.Primary),
-  );
-
-  const channelRow = new ActionRowBuilder().addComponents(
-    new ChannelSelectMenuBuilder()
-      .setCustomId(`${SETUP_TTS_CHANNEL_PREFIX}${guildId}`)
-      .setPlaceholder("전용 TTS 채팅방 선택")
-      .setDefaultChannels(
-        ttsGuildConfig.textChannelId ? [ttsGuildConfig.textChannelId] : [],
-      )
-      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-      .setMinValues(1)
-      .setMaxValues(1),
-  );
-
-  return [modeRow, channelRow];
-}
-
-function buildSetupEmbed(loggingConfig, roomConfig) {
-  const roomGeneratorState = roomConfig.enabled
-    ? `켜짐 (<#${roomConfig.generatorChannelId}>)`
-    : "꺼짐";
-  const roomCategoryState = roomConfig.generatorCategoryId
+function buildSetupEmbeds(loggingConfig, roomConfig, ttsGuildConfig, autoRoleConfig) {
+  const roomState = roomConfig.enabled ? "켜짐" : "꺼짐";
+  const roomChannel = roomConfig.generatorChannelId
+    ? `<#${roomConfig.generatorChannelId}>`
+    : "미설정";
+  const roomCategory = roomConfig.generatorCategoryId
     ? `<#${roomConfig.generatorCategoryId}>`
-    : "카테고리 없음 (서버 루트)";
-  const chatLogState = loggingConfig.chatLogEnabled
-    ? `켜짐 (<#${loggingConfig.chatLogChannelId}>)`
-    : "꺼짐";
-  const joinLeaveState = loggingConfig.joinLeaveLogEnabled
-    ? `켜짐 (<#${loggingConfig.joinLeaveLogChannelId}>)`
-    : "꺼짐";
-  const alertThreshold = loggingConfig.joinLeaveAlertThreshold;
+    : "서버 루트";
+
+  const chatLogState = loggingConfig.chatLogEnabled ? "켜짐" : "꺼짐";
+  const chatLogChannel = loggingConfig.chatLogChannelId
+    ? `<#${loggingConfig.chatLogChannelId}>`
+    : "미설정";
+
+  const joinLeaveState = loggingConfig.joinLeaveLogEnabled ? "켜짐" : "꺼짐";
+  const joinLeaveChannel = loggingConfig.joinLeaveLogChannelId
+    ? `<#${loggingConfig.joinLeaveLogChannelId}>`
+    : "미설정";
   const alertRole = loggingConfig.joinLeaveAlertRoleId
     ? `<@&${loggingConfig.joinLeaveAlertRoleId}>`
     : "없음";
 
-  return new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle("동봇 초기설정")
-    .setDescription(
-      [
-        "방생성, 채팅로그, 들낙로그를 여기서 켜고 끌 수 있어요.",
-        "로그 자동 생성 버튼 한 번으로 카테고리와 로그 채널을 바로 만들 수 있어요.",
-      ].join("\n"),
-    )
-    .addFields(
-      {
-        name: "방생성 상태",
-        value: roomGeneratorState,
-        inline: false,
-      },
-      {
-        name: "방생성 카테고리",
-        value: roomCategoryState,
-        inline: false,
-      },
-      {
-        name: "채팅로그 상태",
-        value: chatLogState,
-        inline: false,
-      },
-      {
-        name: "들낙로그 상태",
-        value: joinLeaveState,
-        inline: false,
-      },
-      {
-        name: "들낙 멘션 설정",
-        value: `기준 ${alertThreshold}회 이상, 역할 ${alertRole}`,
-        inline: false,
-      },
-    );
+  const ttsMode =
+    ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_CHANNEL
+      ? "전용 채팅방"
+      : ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_GUILD
+        ? "자유 모드"
+        : "미설정";
+  const ttsChannel = ttsGuildConfig.textChannelId
+    ? `<#${ttsGuildConfig.textChannelId}>`
+    : "미설정";
+
+  const autoRoleState = autoRoleConfig.enabled ? "켜짐" : "꺼짐";
+  const autoRoleTarget = autoRoleConfig.joinRoleId
+    ? `<@&${autoRoleConfig.joinRoleId}>`
+    : "미설정";
+
+  return [
+    new EmbedBuilder()
+      .setColor(roomConfig.enabled ? 0x2ecc71 : 0xe74c3c)
+      .setTitle("방생성 기능")
+      .addFields(
+        { name: "현재 상태", value: roomState, inline: true },
+        { name: "생성 채널", value: roomChannel, inline: true },
+        { name: "카테고리", value: roomCategory, inline: true },
+      ),
+    new EmbedBuilder()
+      .setColor(loggingConfig.chatLogEnabled ? 0x2ecc71 : 0xe74c3c)
+      .setTitle("채팅로그")
+      .addFields(
+        { name: "현재 상태", value: chatLogState, inline: true },
+        { name: "로그 채널", value: chatLogChannel, inline: true },
+      ),
+    new EmbedBuilder()
+      .setColor(loggingConfig.joinLeaveLogEnabled ? 0x2ecc71 : 0xe74c3c)
+      .setTitle("들낙로그")
+      .addFields(
+        { name: "현재 상태", value: joinLeaveState, inline: true },
+        { name: "로그 채널", value: joinLeaveChannel, inline: true },
+        {
+          name: "멘션",
+          value: `${loggingConfig.joinLeaveAlertThreshold}회 / ${alertRole}`,
+          inline: true,
+        },
+      ),
+    new EmbedBuilder()
+      .setColor(ttsGuildConfig.inputMode ? 0x2ecc71 : 0xf39c12)
+      .setTitle("TTS")
+      .addFields(
+        { name: "현재 모드", value: ttsMode, inline: true },
+        { name: "전용 채팅방", value: ttsChannel, inline: true },
+      ),
+    new EmbedBuilder()
+      .setColor(autoRoleConfig.enabled ? 0x2ecc71 : 0xe74c3c)
+      .setTitle("자동 역할")
+      .addFields(
+        { name: "현재 상태", value: autoRoleState, inline: true },
+        { name: "대상 역할", value: autoRoleTarget, inline: true },
+      ),
+  ];
 }
 
-function buildSetupPanelComponents(guildId, loggingConfig, roomConfig) {
+function buildSetupPanelComponents(
+  guildId,
+  loggingConfig,
+  roomConfig,
+  ttsGuildConfig,
+  autoRoleConfig,
+) {
   const roomToggleRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`${SETUP_ROOM_ENABLE_PREFIX}${guildId}`)
-      .setLabel("방생성 켜기")
-      .setStyle(ButtonStyle.Success),
+      .setLabel("켜기")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(roomConfig.enabled),
     new ButtonBuilder()
       .setCustomId(`${SETUP_ROOM_DISABLE_PREFIX}${guildId}`)
-      .setLabel("방생성 끄기")
+      .setLabel("끄기")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!roomConfig.enabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_ROOM_SETTINGS_BUTTON_PREFIX}${guildId}`)
+      .setLabel("설정")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  const chatLogRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_CHAT_LOG_ENABLE_PREFIX}${guildId}`)
+      .setLabel("켜기")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(loggingConfig.chatLogEnabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_CHAT_LOG_DISABLE_PREFIX}${guildId}`)
+      .setLabel("끄기")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!loggingConfig.chatLogEnabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_CHAT_LOG_SETTINGS_BUTTON_PREFIX}${guildId}`)
+      .setLabel("설정")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  const joinLeaveRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_JOIN_LEAVE_ENABLE_PREFIX}${guildId}`)
+      .setLabel("켜기")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(loggingConfig.joinLeaveLogEnabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_JOIN_LEAVE_DISABLE_PREFIX}${guildId}`)
+      .setLabel("끄기")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!loggingConfig.joinLeaveLogEnabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_JOIN_LEAVE_SETTINGS_BUTTON_PREFIX}${guildId}`)
+      .setLabel("설정")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  const ttsRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_TTS_MODE_CHANNEL_PREFIX}${guildId}`)
+      .setLabel("전용")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_CHANNEL),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_TTS_MODE_GUILD_PREFIX}${guildId}`)
+      .setLabel("자유")
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_GUILD),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_TTS_SETTINGS_BUTTON_PREFIX}${guildId}`)
+      .setLabel("설정")
       .setStyle(ButtonStyle.Secondary),
   );
 
-  const roomCategoryRow = new ActionRowBuilder().addComponents(
+  const autoRoleRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_AUTO_ROLE_ENABLE_PREFIX}${guildId}`)
+      .setLabel("켜기")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(autoRoleConfig.enabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_AUTO_ROLE_DISABLE_PREFIX}${guildId}`)
+      .setLabel("끄기")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!autoRoleConfig.enabled),
+    new ButtonBuilder()
+      .setCustomId(`${SETUP_AUTO_ROLE_SETTINGS_BUTTON_PREFIX}${guildId}`)
+      .setLabel("설정")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  return [roomToggleRow, chatLogRow, joinLeaveRow, ttsRow, autoRoleRow];
+}
+
+function buildAutoRoleRoleSelectRow(guildId, autoRoleConfig) {
+  return new ActionRowBuilder().addComponents(
+    new RoleSelectMenuBuilder()
+      .setCustomId(`${SETUP_AUTO_ROLE_ROLE_PREFIX}${guildId}`)
+      .setPlaceholder("입장 시 자동 지급할 역할 선택")
+      .setDefaultRoles(autoRoleConfig.joinRoleId ? [autoRoleConfig.joinRoleId] : [])
+      .setMinValues(1)
+      .setMaxValues(1),
+  );
+}
+
+function buildRoomCategorySelectRow(guildId, roomConfig) {
+  return new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
       .setCustomId(`${SETUP_ROOM_CATEGORY_PREFIX}${guildId}`)
       .setPlaceholder("방생성 카테고리 선택")
@@ -810,27 +1060,10 @@ function buildSetupPanelComponents(guildId, loggingConfig, roomConfig) {
       .setMinValues(1)
       .setMaxValues(1),
   );
+}
 
-  const logToggleRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_LOGS_BOOTSTRAP_PREFIX}${guildId}`)
-      .setLabel("로그 카테고리+채널 자동 생성")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_CHAT_LOG_DISABLE_PREFIX}${guildId}`)
-      .setLabel("채팅로그 끄기")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_JOIN_LEAVE_DISABLE_PREFIX}${guildId}`)
-      .setLabel("들낙로그 끄기")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`${SETUP_JOIN_LEAVE_ALERT_BUTTON_PREFIX}${guildId}`)
-      .setLabel("들낙 멘션 설정")
-      .setStyle(ButtonStyle.Primary),
-  );
-
-  const chatLogChannelRow = new ActionRowBuilder().addComponents(
+function buildChatLogChannelSelectRow(guildId, loggingConfig) {
+  return new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
       .setCustomId(`${SETUP_CHAT_LOG_CHANNEL_PREFIX}${guildId}`)
       .setPlaceholder("채팅로그 채널 선택")
@@ -841,8 +1074,10 @@ function buildSetupPanelComponents(guildId, loggingConfig, roomConfig) {
       .setMinValues(1)
       .setMaxValues(1),
   );
+}
 
-  const joinLeaveChannelRow = new ActionRowBuilder().addComponents(
+function buildJoinLeaveChannelSelectRow(guildId, loggingConfig) {
+  return new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
       .setCustomId(`${SETUP_JOIN_LEAVE_CHANNEL_PREFIX}${guildId}`)
       .setPlaceholder("들낙로그 채널 선택")
@@ -855,14 +1090,20 @@ function buildSetupPanelComponents(guildId, loggingConfig, roomConfig) {
       .setMinValues(1)
       .setMaxValues(1),
   );
+}
 
-  return [
-    roomToggleRow,
-    roomCategoryRow,
-    logToggleRow,
-    chatLogChannelRow,
-    joinLeaveChannelRow,
-  ];
+function buildTtsChannelSelectRow(guildId, ttsGuildConfig) {
+  return new ActionRowBuilder().addComponents(
+    new ChannelSelectMenuBuilder()
+      .setCustomId(`${SETUP_TTS_CHANNEL_PREFIX}${guildId}`)
+      .setPlaceholder("TTS 전용 채팅방 선택")
+      .setDefaultChannels(
+        ttsGuildConfig.textChannelId ? [ttsGuildConfig.textChannelId] : [],
+      )
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+      .setMinValues(1)
+      .setMaxValues(1),
+  );
 }
 
 async function handleSetupButtonInteraction(interaction) {
@@ -884,6 +1125,81 @@ async function handleSetupButtonInteraction(interaction) {
   if (!hasAdminPermission) {
     await interaction.reply({
       content: "서버 관리자만 초기설정을 변경할 수 있어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_ROOM_SETTINGS_BUTTON_PREFIX)) {
+    const currentRoomConfig = await getGuildConfig(interaction.guild.id);
+
+    await interaction.reply({
+      content: "방생성 설정",
+      components: [buildRoomCategorySelectRow(interaction.guild.id, currentRoomConfig)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_CHAT_LOG_SETTINGS_BUTTON_PREFIX)) {
+    const currentLoggingConfig = await getLoggingConfig(interaction.guild.id);
+    const bootstrapRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${SETUP_LOGS_BOOTSTRAP_PREFIX}${interaction.guild.id}`)
+        .setLabel("로그 자동 생성")
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await interaction.reply({
+      content: "채팅로그 설정",
+      components: [
+        buildChatLogChannelSelectRow(interaction.guild.id, currentLoggingConfig),
+        bootstrapRow,
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_JOIN_LEAVE_SETTINGS_BUTTON_PREFIX)) {
+    const currentLoggingConfig = await getLoggingConfig(interaction.guild.id);
+    const alertRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${SETUP_JOIN_LEAVE_ALERT_BUTTON_PREFIX}${interaction.guild.id}`)
+        .setLabel("멘션 설정")
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await interaction.reply({
+      content: "들낙로그 설정",
+      components: [
+        buildJoinLeaveChannelSelectRow(interaction.guild.id, currentLoggingConfig),
+        alertRow,
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_TTS_SETTINGS_BUTTON_PREFIX)) {
+    const currentTtsGuildConfig = await getTtsGuildConfig(interaction.guild.id);
+
+    await interaction.reply({
+      content: "TTS 설정",
+      components: [buildTtsChannelSelectRow(interaction.guild.id, currentTtsGuildConfig)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_AUTO_ROLE_SETTINGS_BUTTON_PREFIX)) {
+    const currentAutoRoleConfig = await getAutoRoleConfig(interaction.guild.id);
+
+    await interaction.reply({
+      content: "자동 역할 설정",
+      components: [
+        buildAutoRoleRoleSelectRow(interaction.guild.id, currentAutoRoleConfig),
+      ],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -934,6 +1250,58 @@ async function handleSetupButtonInteraction(interaction) {
 
     await interaction.reply({
       content: "방생성을 껐어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_AUTO_ROLE_ENABLE_PREFIX)) {
+    const currentAutoRoleConfig = await getAutoRoleConfig(interaction.guild.id);
+
+    if (!currentAutoRoleConfig.joinRoleId) {
+      await interaction.reply({
+        content: "먼저 설정에서 자동 지급할 역할을 선택해 주세요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const role =
+      interaction.guild.roles.cache.get(currentAutoRoleConfig.joinRoleId) ??
+      (await interaction.guild.roles
+        .fetch(currentAutoRoleConfig.joinRoleId)
+        .catch(() => null));
+
+    if (!role || role.id === interaction.guild.id) {
+      await interaction.reply({
+        content: "설정된 역할을 찾을 수 없어요. 다시 선택해 주세요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await updateAutoRoleConfig(interaction.guild.id, {
+      enabled: true,
+      joinRoleId: role.id,
+    });
+
+    await interaction.reply({
+      content: `자동 역할을 켰어요. 대상 역할: <@&${role.id}>`,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: {
+        roles: [role.id],
+      },
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith(SETUP_AUTO_ROLE_DISABLE_PREFIX)) {
+    await updateAutoRoleConfig(interaction.guild.id, {
+      enabled: false,
+    });
+
+    await interaction.reply({
+      content: "자동 역할을 껐어요.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -1088,6 +1456,59 @@ async function handleSetupTtsButtonInteraction(interaction) {
   await safeInteractionReply(interaction, {
     content: "자유 모드로 설정했어요. 이제 서버 채팅방 어디서든 TTS로 읽어요.",
     flags: MessageFlags.Ephemeral,
+  });
+}
+
+async function handleSetupRoleSelectInteraction(interaction) {
+  const customId = interaction.customId;
+
+  if (!customId.startsWith(SETUP_AUTO_ROLE_ROLE_PREFIX)) {
+    return;
+  }
+
+  const guildId = customId.split(":").at(-1);
+
+  if (!interaction.guild || interaction.guild.id !== guildId) {
+    await interaction.reply({
+      content: "잘못된 서버 설정 요청이에요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const hasAdminPermission = await isAdminUser(
+    interaction.guild,
+    interaction.user.id,
+  );
+
+  if (!hasAdminPermission) {
+    await interaction.reply({
+      content: "서버 관리자만 초기설정을 변경할 수 있어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const selectedRoleId = interaction.values[0];
+
+  if (selectedRoleId === interaction.guild.id) {
+    await interaction.reply({
+      content: "@everyone 역할은 자동 지급 대상으로 설정할 수 없어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await updateAutoRoleConfig(interaction.guild.id, {
+    joinRoleId: selectedRoleId,
+  });
+
+  await interaction.reply({
+    content: `자동 역할을 <@&${selectedRoleId}> 로 설정했어요.`,
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: {
+      roles: [selectedRoleId],
+    },
   });
 }
 
@@ -1790,12 +2211,7 @@ async function handlePollCreateModalSubmit(interaction) {
       messageId: pollMessage.id,
     });
 
-    await safeInteractionEditReply(interaction, {
-      content:
-        `<#${targetChannel.id}> 채널에 ${
-          pollRecord.isAnonymous ? "익명" : "공개"
-        } 투표를 생성했어요.`,
-    });
+    await safeInteractionDeleteReply(interaction);
   } catch (error) {
     console.error("투표 생성 제출 처리 실패", error);
 
@@ -1919,17 +2335,12 @@ async function handlePollButtonInteraction(interaction) {
       const savedPoll = await savePollRecord(poll);
       await refreshPollMessage(interaction, savedPoll);
 
-      let resultText = `${optionIndex + 1}번에 투표했어요.`;
-
-      if (Number.isInteger(previousOption) && previousOption !== optionIndex) {
-        resultText = `${previousOption + 1}번에서 ${optionIndex + 1}번으로 변경했어요.`;
-      } else if (previousOption === optionIndex) {
-        resultText = `이미 ${optionIndex + 1}번에 투표되어 있어요.`;
+      if (previousOption === optionIndex) {
+        await safeInteractionDeleteReply(interaction);
+        return;
       }
 
-      await safeInteractionEditReply(interaction, {
-        content: resultText,
-      });
+      await safeInteractionDeleteReply(interaction);
       return;
     }
 
@@ -1961,9 +2372,7 @@ async function handlePollButtonInteraction(interaction) {
 
       await refreshPollMessage(interaction, closedPoll);
 
-      await safeInteractionEditReply(interaction, {
-        content: "투표를 종료했어요.",
-      });
+      await safeInteractionDeleteReply(interaction);
       return;
     }
 
@@ -1987,6 +2396,868 @@ async function handlePollButtonInteraction(interaction) {
       });
     }
   }
+}
+
+async function handleQueueCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand !== QUEUE_CREATE_SUBCOMMAND_NAME) {
+      await safeInteractionReply(interaction, {
+        content: "알 수 없는 선착순 명령어예요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!guild || !interaction.channel) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버 텍스트 채널에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!isQueueTextChannel(interaction.channel)) {
+      await safeInteractionReply(interaction, {
+        content: "선착순은 일반 텍스트 채널 또는 공지 채널에서만 생성할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const mentionRole = interaction.options.getRole("멘션역할");
+
+    if (mentionRole && mentionRole.id === guild.id) {
+      await safeInteractionReply(interaction, {
+        content: "@everyone 역할은 선착순 멘션 역할로 선택할 수 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const mentionRoleId = mentionRole?.id ?? "none";
+
+    const modal = new ModalBuilder()
+      .setCustomId(
+        `${QUEUE_CREATE_MODAL_PREFIX}${guild.id}:${interaction.channel.id}:${interaction.user.id}:${mentionRoleId}`,
+      )
+      .setTitle("선착순 만들기");
+
+    const titleInput = new TextInputBuilder()
+      .setCustomId(QUEUE_TITLE_FIELD_ID)
+      .setLabel("모집 제목")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setPlaceholder("예: 발로란트 10인 내전")
+      .setMinLength(1)
+      .setMaxLength(100);
+
+    const limitInput = new TextInputBuilder()
+      .setCustomId(QUEUE_LIMIT_FIELD_ID)
+      .setLabel("모집 인원 (2~101)")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setPlaceholder("예: 10")
+      .setMinLength(1)
+      .setMaxLength(3);
+
+    const timeoutInput = new TextInputBuilder()
+      .setCustomId(QUEUE_TIMEOUT_FIELD_ID)
+      .setLabel("시간 제한(분) (1~720)")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setPlaceholder("예: 30")
+      .setValue("30")
+      .setMinLength(1)
+      .setMaxLength(3);
+
+    const noteInput = new TextInputBuilder()
+      .setCustomId(QUEUE_NOTE_FIELD_ID)
+      .setLabel("안내 문구 (선택)")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setPlaceholder("예: 10분 안에 모여주세요")
+      .setMaxLength(300);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(titleInput),
+      new ActionRowBuilder().addComponents(limitInput),
+      new ActionRowBuilder().addComponents(timeoutInput),
+      new ActionRowBuilder().addComponents(noteInput),
+    );
+
+    await interaction.showModal(modal);
+  } catch (error) {
+    console.error("선착 명령어 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "선착순 생성 화면을 여는 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+}
+
+async function handleQueueStatusCommand(interaction) {
+  try {
+    if (!interaction.guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const openQueue = await getOpenQueueByGuildId(interaction.guild.id);
+    const queue = await closeQueueIfExpired(openQueue);
+
+    if (!queue || queue.status !== "open") {
+      await safeInteractionReply(interaction, {
+        content: "현재 진행 중인 선착순이 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await safeInteractionReply(interaction, {
+      embeds: [buildQueueStatusEmbed(queue, `${queue.title} - 선착순 현황`)],
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (error) {
+    console.error("선착현황 명령어 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "선착순 현황을 불러오는 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+}
+
+async function handleQueueCreateModalSubmit(interaction) {
+  try {
+    const parsed = parseQueueCreateModalCustomId(interaction.customId);
+
+    if (!parsed || !interaction.guild || interaction.guild.id !== parsed.guildId) {
+      await safeInteractionReply(interaction, {
+        content: "유효하지 않은 선착순 생성 요청이에요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.user.id !== parsed.creatorUserId) {
+      await safeInteractionReply(interaction, {
+        content: "이 선착순 생성 창은 명령어를 입력한 사용자만 제출할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const targetChannel =
+      interaction.guild.channels.cache.get(parsed.channelId) ??
+      (await interaction.guild.channels.fetch(parsed.channelId).catch(() => null));
+
+    if (!isQueueTextChannel(targetChannel)) {
+      await safeInteractionEditReply(interaction, {
+        content: "선착순을 올릴 채널을 찾을 수 없어요.",
+      });
+      return;
+    }
+
+    const me = interaction.guild.members.me ?? (await interaction.guild.members.fetchMe());
+    const canSend = targetChannel.permissionsFor(me)?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+    ]);
+
+    if (!canSend) {
+      await safeInteractionEditReply(interaction, {
+        content: "해당 채널에 메시지를 보낼 권한이 없어요. 봇 권한을 확인해 주세요.",
+      });
+      return;
+    }
+
+    const existingQueue = await getOpenQueueByGuildId(interaction.guild.id);
+
+    if (existingQueue) {
+      const existingChannel =
+        interaction.guild.channels.cache.get(existingQueue.channelId) ??
+        (await interaction.guild.channels.fetch(existingQueue.channelId).catch(() => null));
+
+      const existingMessage =
+        existingChannel?.isTextBased() && "messages" in existingChannel
+          ? await existingChannel.messages
+              .fetch(existingQueue.messageId)
+              .catch(() => null)
+          : null;
+
+      if (existingMessage) {
+        await safeInteractionEditReply(interaction, {
+          content:
+            "이미 진행 중인 선착순이 있어요. 기존 모집을 마감한 뒤 새로 만들어 주세요.",
+        });
+        return;
+      }
+
+      await saveQueueRecord({
+        ...existingQueue,
+        status: "closed",
+        closedByUserId: interaction.user.id,
+        closedAtMs: Date.now(),
+      });
+
+      clearQueueTimeout(existingQueue.queueId);
+    }
+
+    const title = interaction.fields.getTextInputValue(QUEUE_TITLE_FIELD_ID).trim();
+    const rawLimit = interaction.fields.getTextInputValue(QUEUE_LIMIT_FIELD_ID);
+    const rawTimeout = interaction.fields.getTextInputValue(QUEUE_TIMEOUT_FIELD_ID);
+    const note = interaction.fields.getTextInputValue(QUEUE_NOTE_FIELD_ID).trim();
+    const { limit, error } = parseQueueLimitInput(rawLimit);
+    const { timeoutMinutes, error: timeoutError } = parseQueueTimeoutInput(rawTimeout);
+
+    let mentionRoleId = parsed.mentionRoleId;
+
+    if (mentionRoleId) {
+      const mentionRole =
+        interaction.guild.roles.cache.get(mentionRoleId) ??
+        (await interaction.guild.roles.fetch(mentionRoleId).catch(() => null));
+
+      if (!mentionRole || mentionRole.id === interaction.guild.id) {
+        await safeInteractionEditReply(interaction, {
+          content: "선택한 멘션 역할을 찾을 수 없어요. 다시 시도해 주세요.",
+        });
+        return;
+      }
+
+      mentionRoleId = mentionRole.id;
+    }
+
+    if (!title) {
+      await safeInteractionEditReply(interaction, {
+        content: "모집 제목을 입력해 주세요.",
+      });
+      return;
+    }
+
+    if (error || !Number.isInteger(limit)) {
+      await safeInteractionEditReply(interaction, {
+        content: error ?? "모집 인원을 확인해 주세요.",
+      });
+      return;
+    }
+
+    if (timeoutError || !Number.isInteger(timeoutMinutes)) {
+      await safeInteractionEditReply(interaction, {
+        content: timeoutError ?? "시간 제한을 확인해 주세요.",
+      });
+      return;
+    }
+
+    const now = Date.now();
+    const expiresAtMs = now + timeoutMinutes * 60 * 1000;
+
+    const queueRecord = {
+      queueId: createQueueId(),
+      guildId: interaction.guild.id,
+      channelId: targetChannel.id,
+      messageId: null,
+      creatorUserId: interaction.user.id,
+      mentionRoleId,
+      title: title.slice(0, 100),
+      limit,
+      timeoutMinutes,
+      expiresAtMs,
+      note: note.slice(0, 300),
+      participants: [interaction.user.id],
+      status: "open",
+      closedByUserId: null,
+      createdAtMs: now,
+      closedAtMs: null,
+    };
+
+    if (mentionRoleId) {
+      await targetChannel.send({
+        content: `<@&${mentionRoleId}>`,
+        allowedMentions: {
+          roles: [mentionRoleId],
+        },
+      });
+    }
+
+    const payload = buildQueueMessagePayload(queueRecord);
+    const queueMessage = await targetChannel.send(payload);
+
+    await createQueueRecord({
+      ...queueRecord,
+      messageId: queueMessage.id,
+    });
+
+    scheduleQueueTimeout({
+      ...queueRecord,
+      messageId: queueMessage.id,
+    });
+
+    await safeInteractionDeleteReply(interaction);
+  } catch (error) {
+    console.error("선착 생성 제출 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "선착순을 만드는 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: "선착순을 만드는 중 오류가 발생했어요.",
+      });
+    }
+  }
+}
+
+async function refreshQueueMessage(interaction, queue) {
+  if (interaction.message?.id === queue.messageId) {
+    await interaction.message.edit(buildQueueMessagePayload(queue));
+    return;
+  }
+
+  if (!interaction.guild) {
+    return;
+  }
+
+  await refreshQueueMessageByGuild(interaction.guild, queue);
+}
+
+async function refreshQueueMessageByGuild(guild, queue) {
+  const payload = buildQueueMessagePayload(queue);
+
+  const targetChannel =
+    guild.channels.cache.get(queue.channelId) ??
+    (await guild.channels.fetch(queue.channelId).catch(() => null));
+
+  if (!targetChannel?.isTextBased() || !("messages" in targetChannel)) {
+    return;
+  }
+
+  const targetMessage = await targetChannel.messages.fetch(queue.messageId).catch(() => null);
+
+  if (!targetMessage) {
+    return;
+  }
+
+  await targetMessage.edit(payload);
+}
+
+function clearQueueTimeout(queueId) {
+  const timeoutJob = queueTimeoutJobs.get(queueId);
+
+  if (timeoutJob) {
+    clearTimeout(timeoutJob);
+    queueTimeoutJobs.delete(queueId);
+  }
+}
+
+function scheduleQueueTimeout(queue) {
+  if (
+    !queue ||
+    queue.status !== "open" ||
+    !Number.isFinite(queue.expiresAtMs)
+  ) {
+    return;
+  }
+
+  clearQueueTimeout(queue.queueId);
+
+  const delay = Math.max(0, queue.expiresAtMs - Date.now());
+  const timeoutJob = setTimeout(() => {
+    closeQueueByTimeout(queue.queueId).catch((error) => {
+      console.error("선착순 시간 만료 자동 마감 실패", error);
+    });
+  }, delay);
+
+  queueTimeoutJobs.set(queue.queueId, timeoutJob);
+}
+
+async function closeQueueByTimeout(queueId) {
+  const queue = await getQueueRecord(queueId);
+
+  if (!queue) {
+    clearQueueTimeout(queueId);
+    return null;
+  }
+
+  if (queue.status !== "open") {
+    clearQueueTimeout(queueId);
+    return queue;
+  }
+
+  if (!Number.isFinite(queue.expiresAtMs)) {
+    return queue;
+  }
+
+  if (Date.now() < queue.expiresAtMs) {
+    scheduleQueueTimeout(queue);
+    return queue;
+  }
+
+  const closedQueue = await saveQueueRecord({
+    ...queue,
+    status: "closed",
+    closedByUserId: null,
+    closedAtMs: Date.now(),
+  });
+
+  clearQueueTimeout(queueId);
+
+  const guild =
+    client.guilds.cache.get(closedQueue.guildId) ??
+    (await client.guilds.fetch(closedQueue.guildId).catch(() => null));
+
+  if (guild) {
+    await refreshQueueMessageByGuild(guild, closedQueue);
+  }
+
+  return closedQueue;
+}
+
+async function closeQueueIfExpired(queue) {
+  if (!queue || queue.status !== "open") {
+    return queue;
+  }
+
+  if (!Number.isFinite(queue.expiresAtMs)) {
+    return queue;
+  }
+
+  if (Date.now() < queue.expiresAtMs) {
+    scheduleQueueTimeout(queue);
+    return queue;
+  }
+
+  return closeQueueByTimeout(queue.queueId);
+}
+
+async function handleQueueButtonInteraction(interaction) {
+  try {
+    const [, , action, queueId] = interaction.customId.split(":");
+
+    if (!interaction.guild || !action || !queueId) {
+      await safeInteractionReply(interaction, {
+        content: "유효하지 않은 선착순 버튼이에요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const fetchedQueue = await getQueueRecord(queueId);
+    const queue = await closeQueueIfExpired(fetchedQueue);
+
+    if (!queue || queue.guildId !== interaction.guild.id) {
+      await safeInteractionEditReply(interaction, {
+        content: "선착순 정보를 찾을 수 없어요.",
+      });
+      return;
+    }
+
+    if (action === "status") {
+      await safeInteractionEditReply(interaction, {
+        embeds: [buildQueueStatusEmbed(queue, `${queue.title} - 선착순 현황`)],
+      });
+      return;
+    }
+
+    if (action === "join") {
+      if (queue.status !== "open") {
+        await safeInteractionEditReply(interaction, {
+          content: "이미 마감된 선착순이에요.",
+        });
+        return;
+      }
+
+      if (queue.participants.includes(interaction.user.id)) {
+        await safeInteractionEditReply(interaction, {
+          content: "이미 참가 중이에요.",
+        });
+        return;
+      }
+
+      if (queue.participants.length >= queue.limit) {
+        await safeInteractionEditReply(interaction, {
+          content: "모집 인원이 모두 찼어요.",
+        });
+        return;
+      }
+
+      const savedQueue = await saveQueueRecord({
+        ...queue,
+        participants: [...queue.participants, interaction.user.id],
+      });
+
+      await refreshQueueMessage(interaction, savedQueue);
+
+      await safeInteractionDeleteReply(interaction);
+      return;
+    }
+
+    if (action === "leave") {
+      if (queue.status !== "open") {
+        await safeInteractionEditReply(interaction, {
+          content: "이미 마감된 선착순이에요.",
+        });
+        return;
+      }
+
+      if (!queue.participants.includes(interaction.user.id)) {
+        await safeInteractionEditReply(interaction, {
+          content: "현재 참가자가 아니에요.",
+        });
+        return;
+      }
+
+      const nextParticipants = queue.participants.filter(
+        (userId) => userId !== interaction.user.id,
+      );
+
+      const nextQueue =
+        nextParticipants.length === 0
+          ? {
+              ...queue,
+              participants: [],
+              status: "closed",
+              closedByUserId: interaction.user.id,
+              closedAtMs: Date.now(),
+            }
+          : {
+              ...queue,
+              participants: nextParticipants,
+            };
+
+      const savedQueue = await saveQueueRecord(nextQueue);
+      if (savedQueue.status === "closed") {
+        clearQueueTimeout(savedQueue.queueId);
+      }
+      await refreshQueueMessage(interaction, savedQueue);
+
+      await safeInteractionDeleteReply(interaction);
+      return;
+    }
+
+    if (action === "end") {
+      const canCloseQueue =
+        interaction.user.id === queue.creatorUserId ||
+        (await isAdminUser(interaction.guild, interaction.user.id));
+
+      if (!canCloseQueue) {
+        await safeInteractionEditReply(interaction, {
+          content: "선착순 마감은 관리자 또는 생성자만 가능해요.",
+        });
+        return;
+      }
+
+      if (queue.status === "closed") {
+        await safeInteractionEditReply(interaction, {
+          content: "이미 마감된 선착순이에요.",
+        });
+        return;
+      }
+
+      const closedQueue = await saveQueueRecord({
+        ...queue,
+        status: "closed",
+        closedByUserId: interaction.user.id,
+        closedAtMs: Date.now(),
+      });
+
+      clearQueueTimeout(closedQueue.queueId);
+
+      await refreshQueueMessage(interaction, closedQueue);
+
+      await safeInteractionDeleteReply(interaction);
+      return;
+    }
+
+    await safeInteractionEditReply(interaction, {
+      content: "알 수 없는 선착순 버튼 동작이에요.",
+    });
+  } catch (error) {
+    console.error("선착 버튼 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "선착순 버튼 처리 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: "선착순 버튼 처리 중 오류가 발생했어요.",
+      });
+    }
+  }
+}
+
+async function handleRolePanelCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand !== ROLE_PANEL_CREATE_SUBCOMMAND_NAME) {
+      await safeInteractionReply(interaction, {
+        content: "알 수 없는 역할지급 명령어예요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const hasAdminPermission = await isAdminUser(guild, interaction.user.id);
+
+    if (!hasAdminPermission) {
+      await safeInteractionReply(interaction, {
+        content: "서버 관리자만 역할지급 패널을 만들 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const targetChannel = interaction.options.getChannel("채널", true);
+    const targetRole = interaction.options.getRole("역할", true);
+
+    if (!isQueueTextChannel(targetChannel)) {
+      await safeInteractionReply(interaction, {
+        content: "패널 채널은 일반 텍스트 채널 또는 공지 채널만 선택할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (targetRole.id === guild.id) {
+      await safeInteractionReply(interaction, {
+        content: "@everyone 역할은 지급 대상으로 선택할 수 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const me = guild.members.me ?? (await guild.members.fetchMe());
+    const canSendPanel = targetChannel.permissionsFor(me)?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.AddReactions,
+      PermissionFlagsBits.ReadMessageHistory,
+    ]);
+
+    if (!canSendPanel) {
+      await safeInteractionEditReply(interaction, {
+        content:
+          "해당 채널에 패널을 만들 권한이 없어요. View/Send/Add Reactions/Read History 권한을 확인해 주세요.",
+      });
+      return;
+    }
+
+    const emojiInput = interaction.options.getString("이모지")?.trim() || "✅";
+    const panelTitle =
+      interaction.options.getString("제목")?.trim() || "자동 역할 지급";
+    const panelGuide =
+      interaction.options.getString("안내")?.trim() ||
+      `${emojiInput} 반응을 누르면 <@&${targetRole.id}> 역할이 지급/해제됩니다.`;
+
+    const panelEmbed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle(panelTitle.slice(0, 80))
+      .setDescription(panelGuide.slice(0, 4096));
+
+    const panelMessage = await targetChannel.send({ embeds: [panelEmbed] });
+
+    let reaction = null;
+
+    try {
+      reaction = await panelMessage.react(emojiInput);
+    } catch {
+      await panelMessage.delete().catch(() => null);
+      await safeInteractionEditReply(interaction, {
+        content: "이모지를 확인할 수 없어 패널을 만들지 못했어요.",
+      });
+      return;
+    }
+
+    const emojiSnapshot = serializeReactionEmoji(reaction.emoji);
+
+    if (!emojiSnapshot.emojiName) {
+      await panelMessage.delete().catch(() => null);
+      await safeInteractionEditReply(interaction, {
+        content: "이모지 정보를 읽지 못해 패널을 만들지 못했어요.",
+      });
+      return;
+    }
+
+    await createReactionRolePanel({
+      messageId: panelMessage.id,
+      guildId: guild.id,
+      channelId: targetChannel.id,
+      roleId: targetRole.id,
+      emojiId: emojiSnapshot.emojiId,
+      emojiName: emojiSnapshot.emojiName,
+      createdByUserId: interaction.user.id,
+      createdAtMs: Date.now(),
+    });
+
+    await safeInteractionEditReply(interaction, {
+      content: `<#${targetChannel.id}> 채널에 역할지급 패널을 만들었어요.`,
+    });
+  } catch (error) {
+    console.error("역할지급 명령어 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "역할지급 패널 생성 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: "역할지급 패널 생성 중 오류가 발생했어요.",
+      });
+    }
+  }
+}
+
+async function handleAutoRoleOnMemberJoin(member) {
+  if (!member.guild || member.user?.bot) {
+    return;
+  }
+
+  const autoRoleConfig = await getAutoRoleConfig(member.guild.id);
+
+  if (!autoRoleConfig.enabled || !autoRoleConfig.joinRoleId) {
+    return;
+  }
+
+  const role =
+    member.guild.roles.cache.get(autoRoleConfig.joinRoleId) ??
+    (await member.guild.roles.fetch(autoRoleConfig.joinRoleId).catch(() => null));
+
+  if (!role || role.id === member.guild.id) {
+    return;
+  }
+
+  if (member.roles.cache.has(role.id)) {
+    return;
+  }
+
+  await member.roles.add(role, "동봇 자동 역할 지급");
+}
+
+async function handleReactionRoleToggle(reaction, user, shouldGrant) {
+  if (!user || user.bot) {
+    return;
+  }
+
+  let workingReaction = reaction;
+
+  if (workingReaction.partial) {
+    workingReaction = await workingReaction.fetch().catch(() => null);
+  }
+
+  if (!workingReaction?.message?.id || !workingReaction.message.guildId) {
+    return;
+  }
+
+  const panel = await getReactionRolePanel(workingReaction.message.id);
+
+  if (!panel || panel.guildId !== workingReaction.message.guildId) {
+    return;
+  }
+
+  if (!isReactionRoleMatch(panel, workingReaction.emoji)) {
+    return;
+  }
+
+  const guild =
+    workingReaction.message.guild ??
+    (await client.guilds.fetch(workingReaction.message.guildId).catch(() => null));
+
+  if (!guild) {
+    return;
+  }
+
+  const role =
+    guild.roles.cache.get(panel.roleId) ??
+    (await guild.roles.fetch(panel.roleId).catch(() => null));
+
+  if (!role || role.id === guild.id) {
+    return;
+  }
+
+  const member = await guild.members.fetch(user.id).catch(() => null);
+
+  if (!member || member.user?.bot) {
+    return;
+  }
+
+  if (shouldGrant) {
+    if (!member.roles.cache.has(role.id)) {
+      await member.roles.add(role, "동봇 반응 역할 지급");
+    }
+    return;
+  }
+
+  if (member.roles.cache.has(role.id)) {
+    await member.roles.remove(role, "동봇 반응 역할 해제");
+  }
+}
+
+function serializeReactionEmoji(emoji) {
+  return {
+    emojiId: emoji.id ?? null,
+    emojiName: emoji.name ?? null,
+  };
+}
+
+function isReactionRoleMatch(panel, emoji) {
+  if (panel.emojiId) {
+    return emoji.id === panel.emojiId;
+  }
+
+  return !emoji.id && emoji.name === panel.emojiName;
 }
 
 async function handleCallRoomCommand(interaction) {
