@@ -152,6 +152,7 @@ const ROOM_SETUP_BUTTON_PREFIX = "dongbot:room-setup:";
 const ROOM_CATEGORY_SELECT_PREFIX = "dongbot:room-category:";
 const ROOT_CATEGORY_VALUE = "dongbot:root-category";
 const CALL_ROOM_COMMAND_NAME = "통화방";
+const LEAVE_VOICE_COMMAND_NAME = "나가";
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
@@ -192,14 +193,21 @@ const ROLE_PANEL_COMMAND_NAME = "역할지급";
 const ROLE_PANEL_CREATE_SUBCOMMAND_NAME = "패널생성";
 const PROFANITY_COMMAND_NAME = "욕설감지";
 const PROFANITY_CHANNEL_GROUP_NAME = "채널";
+const PROFANITY_LEVEL_GROUP_NAME = "강도";
 const PROFANITY_WORD_GROUP_NAME = "단어";
 const PROFANITY_EXCEPTION_GROUP_NAME = "예외";
 const PROFANITY_ENABLE_SUBCOMMAND_NAME = "켜기";
 const PROFANITY_DISABLE_SUBCOMMAND_NAME = "끄기";
 const PROFANITY_STATUS_SUBCOMMAND_NAME = "상태";
+const PROFANITY_LEVEL_SET_SUBCOMMAND_NAME = "설정";
 const PROFANITY_ADD_SUBCOMMAND_NAME = "추가";
 const PROFANITY_REMOVE_SUBCOMMAND_NAME = "삭제";
 const PROFANITY_LIST_SUBCOMMAND_NAME = "목록";
+const PROFANITY_LEVEL_OPTION_NAME = "수준";
+const PROFANITY_WORD_LEVEL_OPTION_NAME = "등급";
+const PROFANITY_LEVEL_LOW_VALUE = "low";
+const PROFANITY_LEVEL_MEDIUM_VALUE = "medium";
+const PROFANITY_LEVEL_HIGH_VALUE = "high";
 const MAX_TTS_TEXT_LENGTH = 180;
 const DEFAULT_TTS_TEST_TEXT = "테스트 메시지입니다. 지금 읽히면 TTS가 정상 동작 중입니다.";
 const TTS_PLAYBACK_START_TIMEOUT_MS = 15_000;
@@ -308,6 +316,11 @@ const callRoomCommand = new SlashCommandBuilder()
           .setMaxLength(100),
       ),
   );
+
+const leaveVoiceCommand = new SlashCommandBuilder()
+  .setName(LEAVE_VOICE_COMMAND_NAME)
+  .setDescription("봇을 현재 음성 채널에서 나가게 합니다")
+  .setDMPermission(false);
 
 const ttsCommand = new SlashCommandBuilder()
   .setName(TTS_COMMAND_NAME)
@@ -487,6 +500,41 @@ const profanityCommand = new SlashCommandBuilder()
   )
   .addSubcommandGroup((group) =>
     group
+      .setName(PROFANITY_LEVEL_GROUP_NAME)
+      .setDescription("검열 강도를 조절합니다")
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName(PROFANITY_STATUS_SUBCOMMAND_NAME)
+          .setDescription("현재 검열 강도를 확인합니다"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName(PROFANITY_LEVEL_SET_SUBCOMMAND_NAME)
+          .setDescription("검열 강도를 변경합니다")
+          .addStringOption((option) =>
+            option
+              .setName(PROFANITY_LEVEL_OPTION_NAME)
+              .setDescription("낮음/보통/높음")
+              .setRequired(true)
+              .addChoices(
+                {
+                  name: "낮음 (검열 범위 좁음)",
+                  value: PROFANITY_LEVEL_LOW_VALUE,
+                },
+                {
+                  name: "보통 (검열 범위 중간)",
+                  value: PROFANITY_LEVEL_MEDIUM_VALUE,
+                },
+                {
+                  name: "높음 (검열 범위 넓음)",
+                  value: PROFANITY_LEVEL_HIGH_VALUE,
+                },
+              ),
+          ),
+      ),
+  )
+  .addSubcommandGroup((group) =>
+    group
       .setName(PROFANITY_WORD_GROUP_NAME)
       .setDescription("서버 커스텀 금칙어 관리")
       .addSubcommand((subcommand) =>
@@ -500,6 +548,17 @@ const profanityCommand = new SlashCommandBuilder()
               .setRequired(true)
               .setMinLength(1)
               .setMaxLength(30),
+          )
+          .addStringOption((option) =>
+            option
+              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
+              .setDescription("낮음/보통/높음 리스트 선택")
+              .setRequired(true)
+              .addChoices(
+                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
+                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
+              ),
           ),
       )
       .addSubcommand((subcommand) =>
@@ -513,12 +572,34 @@ const profanityCommand = new SlashCommandBuilder()
               .setRequired(true)
               .setMinLength(1)
               .setMaxLength(30),
+          )
+          .addStringOption((option) =>
+            option
+              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
+              .setDescription("낮음/보통/높음 리스트 선택")
+              .setRequired(true)
+              .addChoices(
+                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
+                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
+              ),
           ),
       )
       .addSubcommand((subcommand) =>
         subcommand
           .setName(PROFANITY_LIST_SUBCOMMAND_NAME)
-          .setDescription("등록된 금칙어 목록을 확인합니다"),
+          .setDescription("등록된 금칙어 목록을 확인합니다")
+          .addStringOption((option) =>
+            option
+              .setName(PROFANITY_WORD_LEVEL_OPTION_NAME)
+              .setDescription("특정 등급만 보려면 선택")
+              .setRequired(false)
+              .addChoices(
+                { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
+                { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+                { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
+              ),
+          ),
       ),
   )
   .addSubcommandGroup((group) =>
@@ -578,6 +659,11 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === CALL_ROOM_COMMAND_NAME) {
         await handleCallRoomCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === LEAVE_VOICE_COMMAND_NAME) {
+        await handleLeaveVoiceCommand(interaction);
         return;
       }
 
@@ -845,7 +931,7 @@ async function sendSetupMessage(guild) {
         `- 유저가 입장하면 ${roomPrefix} 1, 2, 3... 자동 생성`,
         "- 생성된 수다방이 비면 자동 삭제",
         "- 동봇이 만든 수다방만 삭제 (기준 채널은 유지)",
-        "- /초기설정 명령어로 채팅로그/들낙로그 설정 가능",
+        "- /초기설정 열기 명령어로 채팅로그/들낙로그 설정 가능",
       ].join("\n"),
     );
 
@@ -942,6 +1028,7 @@ async function registerAllGuildCommands() {
 async function registerGuildCommands(guild) {
   await guild.commands.set([
     callRoomCommand.toJSON(),
+    leaveVoiceCommand.toJSON(),
     ttsCommand.toJSON(),
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
@@ -3461,15 +3548,101 @@ async function handleProfanityCommand(interaction) {
       return;
     }
 
-    if (subcommandGroup === PROFANITY_WORD_GROUP_NAME) {
-      const currentTerms = profanityConfig.customBlockedTerms;
-
-      if (subcommand === PROFANITY_LIST_SUBCOMMAND_NAME) {
+    if (subcommandGroup === PROFANITY_LEVEL_GROUP_NAME) {
+      if (subcommand === PROFANITY_STATUS_SUBCOMMAND_NAME) {
         await safeInteractionEditReply(interaction, {
-          content: buildProfanityListContent("커스텀 금칙어", currentTerms),
+          content:
+            "현재 검열 강도: " +
+            `${getProfanityLevelLabel(profanityConfig.moderationLevel)}`,
         });
         return;
       }
+
+      if (subcommand === PROFANITY_LEVEL_SET_SUBCOMMAND_NAME) {
+        const requestedLevel = interaction.options.getString(
+          PROFANITY_LEVEL_OPTION_NAME,
+          true,
+        );
+
+        if (!isProfanityLevelValue(requestedLevel)) {
+          await safeInteractionEditReply(interaction, {
+            content: "검열 강도 값이 올바르지 않아요.",
+          });
+          return;
+        }
+
+        if (requestedLevel === profanityConfig.moderationLevel) {
+          await safeInteractionEditReply(interaction, {
+            content:
+              "이미 해당 강도로 설정되어 있어요: " +
+              `${getProfanityLevelLabel(requestedLevel)}`,
+          });
+          return;
+        }
+
+        await updateProfanityConfig(guild.id, {
+          moderationLevel: requestedLevel,
+        });
+
+        await safeInteractionEditReply(interaction, {
+          content:
+            "검열 강도를 변경했어요: " +
+            `${getProfanityLevelLabel(requestedLevel)}`,
+        });
+        return;
+      }
+
+      await safeInteractionEditReply(interaction, {
+        content: "알 수 없는 욕설감지 강도 명령어예요.",
+      });
+      return;
+    }
+
+    if (subcommandGroup === PROFANITY_WORD_GROUP_NAME) {
+      const selectedLevel = interaction.options.getString(
+        PROFANITY_WORD_LEVEL_OPTION_NAME,
+        subcommand !== PROFANITY_LIST_SUBCOMMAND_NAME,
+      );
+
+      if (subcommand === PROFANITY_LIST_SUBCOMMAND_NAME) {
+        if (!selectedLevel) {
+          await safeInteractionEditReply(interaction, {
+            content: buildAllProfanityLevelListsContent(profanityConfig),
+          });
+          return;
+        }
+
+        if (!isProfanityLevelValue(selectedLevel)) {
+          await safeInteractionEditReply(interaction, {
+            content: "조회할 리스트 등급이 올바르지 않아요.",
+          });
+          return;
+        }
+
+        const targetTerms = getProfanityTermsByLevel(
+          profanityConfig,
+          selectedLevel,
+        );
+
+        await safeInteractionEditReply(interaction, {
+          content: buildProfanityListContent(
+            `${getProfanityLevelLabel(selectedLevel)} 금칙어 리스트`,
+            targetTerms,
+          ),
+        });
+        return;
+      }
+
+      if (!isProfanityLevelValue(selectedLevel)) {
+        await safeInteractionEditReply(interaction, {
+          content: "수정할 리스트 등급이 올바르지 않아요.",
+        });
+        return;
+      }
+
+      const targetFieldName = getProfanityTermsFieldNameByLevel(selectedLevel);
+      const currentTerms = getProfanityTermsByLevel(profanityConfig, selectedLevel);
+      const levelLabel = getProfanityLevelLabel(selectedLevel);
 
       const rawInput = interaction.options.getString("값", true);
       const normalizedInput = normalizeProfanityTermInput(rawInput);
@@ -3484,17 +3657,21 @@ async function handleProfanityCommand(interaction) {
       if (subcommand === PROFANITY_ADD_SUBCOMMAND_NAME) {
         if (currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
-            content: `이미 등록된 금칙어예요: ${normalizedInput}`,
+            content:
+              `${levelLabel} 리스트에 이미 등록된 금칙어예요: ` +
+              `${normalizedInput}`,
           });
           return;
         }
 
         await updateProfanityConfig(guild.id, {
-          customBlockedTerms: [...currentTerms, normalizedInput],
+          [targetFieldName]: [...currentTerms, normalizedInput],
         });
 
         await safeInteractionEditReply(interaction, {
-          content: `금칙어를 추가했어요: ${normalizedInput}`,
+          content:
+            `${levelLabel} 리스트에 금칙어를 추가했어요: ` +
+            `${normalizedInput}`,
         });
         return;
       }
@@ -3502,19 +3679,23 @@ async function handleProfanityCommand(interaction) {
       if (subcommand === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
         if (!currentTerms.includes(normalizedInput)) {
           await safeInteractionEditReply(interaction, {
-            content: `등록된 금칙어가 아니에요: ${normalizedInput}`,
+            content:
+              `${levelLabel} 리스트에 등록된 금칙어가 아니에요: ` +
+              `${normalizedInput}`,
           });
           return;
         }
 
         await updateProfanityConfig(guild.id, {
-          customBlockedTerms: currentTerms.filter(
+          [targetFieldName]: currentTerms.filter(
             (term) => term !== normalizedInput,
           ),
         });
 
         await safeInteractionEditReply(interaction, {
-          content: `금칙어를 삭제했어요: ${normalizedInput}`,
+          content:
+            `${levelLabel} 리스트에서 금칙어를 삭제했어요: ` +
+            `${normalizedInput}`,
         });
         return;
       }
@@ -3623,6 +3804,67 @@ function normalizeProfanityTermInput(rawInput) {
     .trim();
 }
 
+function isProfanityLevelValue(level) {
+  return (
+    level === PROFANITY_LEVEL_LOW_VALUE ||
+    level === PROFANITY_LEVEL_MEDIUM_VALUE ||
+    level === PROFANITY_LEVEL_HIGH_VALUE
+  );
+}
+
+function getProfanityLevelLabel(level) {
+  if (level === PROFANITY_LEVEL_LOW_VALUE) {
+    return "낮음";
+  }
+
+  if (level === PROFANITY_LEVEL_HIGH_VALUE) {
+    return "높음";
+  }
+
+  return "보통";
+}
+
+function getProfanityTermsFieldNameByLevel(level) {
+  if (level === PROFANITY_LEVEL_LOW_VALUE) {
+    return "customLowTerms";
+  }
+
+  if (level === PROFANITY_LEVEL_HIGH_VALUE) {
+    return "customHighTerms";
+  }
+
+  return "customMediumTerms";
+}
+
+function getProfanityTermsByLevel(config, level) {
+  const fieldName = getProfanityTermsFieldNameByLevel(level);
+
+  if (!Array.isArray(config?.[fieldName])) {
+    return [];
+  }
+
+  return config[fieldName];
+}
+
+function buildAllProfanityLevelListsContent(config) {
+  const sections = [
+    buildProfanityListContent(
+      "낮음 금칙어 리스트",
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_LOW_VALUE),
+    ),
+    buildProfanityListContent(
+      "보통 금칙어 리스트",
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_MEDIUM_VALUE),
+    ),
+    buildProfanityListContent(
+      "높음 금칙어 리스트",
+      getProfanityTermsByLevel(config, PROFANITY_LEVEL_HIGH_VALUE),
+    ),
+  ];
+
+  return sections.join("\n\n");
+}
+
 function buildProfanityListContent(title, terms) {
   if (!Array.isArray(terms) || terms.length === 0) {
     return `${title}: 없음`;
@@ -3667,7 +3909,12 @@ async function handleProfanityModerationMessage(message) {
 
   if (
     !containsProfanity(message.content, {
-      extraTerms: profanityConfig.customBlockedTerms,
+      moderationLevel: profanityConfig.moderationLevel,
+      extraTermsByLevel: {
+        low: profanityConfig.customLowTerms,
+        medium: profanityConfig.customMediumTerms,
+        high: profanityConfig.customHighTerms,
+      },
       exclusionPhrases: profanityConfig.customAllowedTerms,
     })
   ) {
@@ -3792,6 +4039,64 @@ function isReactionRoleMatch(panel, emoji) {
   }
 
   return !emoji.id && emoji.name === panel.emojiName;
+}
+
+async function handleLeaveVoiceCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const connection = getVoiceConnection(guild.id);
+
+    if (!connection) {
+      await safeInteractionReply(interaction, {
+        content: "현재 봇이 연결된 음성 채널이 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    const botChannelId = connection.joinConfig.channelId;
+    const isSameVoiceChannel =
+      Boolean(member?.voice?.channelId) && member.voice.channelId === botChannelId;
+    const isAdmin =
+      Boolean(member) &&
+      (guild.ownerId === interaction.user.id ||
+        member.permissions.has(PermissionFlagsBits.Administrator));
+
+    if (!isSameVoiceChannel && !isAdmin) {
+      await safeInteractionReply(interaction, {
+        content:
+          "봇과 같은 음성 채널에 있거나 서버 관리자여야 이 명령어를 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    connection.destroy();
+
+    await safeInteractionReply(interaction, {
+      content: "음성 채널에서 나갔어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (error) {
+    console.error("나가 명령어 처리 실패", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await safeInteractionReply(interaction, {
+        content: "음성 채널 나가기 처리 중 오류가 발생했어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
 }
 
 async function handleCallRoomCommand(interaction) {
@@ -3946,7 +4251,7 @@ async function handleTtsCommand(interaction) {
       if (!ttsGuildConfig.inputMode) {
         await safeInteractionEditReply(interaction, {
           content:
-            "TTS 입력 방식이 아직 설정되지 않았어요. `/초기설정`에서 먼저 설정해 주세요.",
+            "TTS 입력 방식이 아직 설정되지 않았어요. `/초기설정 열기`에서 먼저 설정해 주세요.",
         });
         return;
       }
@@ -4051,7 +4356,7 @@ async function handleTtsCommand(interaction) {
           ? `전용 채팅방 모드 (${ttsGuildConfig.textChannelId ? `<#${ttsGuildConfig.textChannelId}>` : "채널 미지정"})`
           : ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_GUILD
             ? "자유 모드(어디서든)"
-            : "미설정 (/초기설정에서 설정)";
+            : "미설정 (/초기설정 열기에서 설정)";
 
       await safeInteractionEditReply(interaction, {
         content: `TTS 언어를 선택해 주세요.\n현재 입력 모드: ${modeSummary}`,
@@ -4071,7 +4376,7 @@ async function handleTtsCommand(interaction) {
 
     await safeInteractionEditReply(interaction, {
       content:
-        "사용법: /tts O, /tts X, /tts 설정, /tts 설정 한국어, /tts english",
+        "사용법: /tts 실행 O, /tts 실행 X, /tts 실행 설정, /tts 실행 설정 한국어, /tts 실행 english",
     });
   } catch (error) {
     console.error("TTS 명령어 처리 실패", error);

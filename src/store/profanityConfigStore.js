@@ -4,6 +4,28 @@ import { db, isFirebaseReady } from "../firebase.js";
 
 const PROFANITY_CONFIG_COLLECTION = "profanityConfigs";
 const memoryStore = new Map();
+const PROFANITY_LEVEL_LOW = "low";
+const PROFANITY_LEVEL_MEDIUM = "medium";
+const PROFANITY_LEVEL_HIGH = "high";
+const VALID_PROFANITY_LEVELS = new Set([
+  PROFANITY_LEVEL_LOW,
+  PROFANITY_LEVEL_MEDIUM,
+  PROFANITY_LEVEL_HIGH,
+]);
+
+function normalizeModerationLevel(rawLevel) {
+  if (typeof rawLevel !== "string") {
+    return PROFANITY_LEVEL_MEDIUM;
+  }
+
+  const normalized = rawLevel.trim().toLowerCase();
+
+  if (!VALID_PROFANITY_LEVELS.has(normalized)) {
+    return PROFANITY_LEVEL_MEDIUM;
+  }
+
+  return normalized;
+}
 
 function normalizeKeyword(rawKeyword) {
   if (typeof rawKeyword !== "string") {
@@ -54,10 +76,18 @@ function normalizeKeywordList(rawKeywords) {
 }
 
 function normalizeConfig(guildId, data = {}) {
+  const legacyBlockedTerms = normalizeKeywordList(data.customBlockedTerms);
+  const mediumTermsSource =
+    data.customMediumTerms ??
+    (legacyBlockedTerms.length > 0 ? legacyBlockedTerms : undefined);
+
   return {
     guildId,
     enabledChannelIds: normalizeEnabledChannelIds(data.enabledChannelIds),
-    customBlockedTerms: normalizeKeywordList(data.customBlockedTerms),
+    moderationLevel: normalizeModerationLevel(data.moderationLevel),
+    customLowTerms: normalizeKeywordList(data.customLowTerms),
+    customMediumTerms: normalizeKeywordList(mediumTermsSource),
+    customHighTerms: normalizeKeywordList(data.customHighTerms),
     customAllowedTerms: normalizeKeywordList(data.customAllowedTerms),
   };
 }
