@@ -148,6 +148,8 @@ const client = new Client({
 
 const guildTaskQueue = new Map();
 const queueTimeoutJobs = new Map();
+const profanityDeleteLogSkipMap = new Map();
+const PROFANITY_DELETE_LOG_SKIP_TTL_MS = 5 * 60 * 1000;
 
 const ROOM_SETUP_BUTTON_PREFIX = "dongbot:room-setup:";
 const ROOM_CATEGORY_SELECT_PREFIX = "dongbot:room-category:";
@@ -2066,6 +2068,10 @@ async function ensureTextChannelInCategory(
 }
 
 async function handleMessageDeleteLog(message) {
+  if (consumeProfanityDeleteLogSkip(message.id)) {
+    return;
+  }
+
   let workingMessage = message;
 
   if (!workingMessage.guild) {
@@ -2142,6 +2148,49 @@ async function handleMessageDeleteLog(message) {
   }
 
   await logChannel.send({ embeds: [embed] });
+}
+
+function pruneProfanityDeleteLogSkipEntries(now = Date.now()) {
+  for (const [messageId, expiresAt] of profanityDeleteLogSkipMap.entries()) {
+    if (expiresAt <= now) {
+      profanityDeleteLogSkipMap.delete(messageId);
+    }
+  }
+}
+
+function markProfanityDeleteLogSkip(messageId) {
+  if (!messageId) {
+    return;
+  }
+
+  const now = Date.now();
+  pruneProfanityDeleteLogSkipEntries(now);
+  profanityDeleteLogSkipMap.set(messageId, now + PROFANITY_DELETE_LOG_SKIP_TTL_MS);
+}
+
+function clearProfanityDeleteLogSkip(messageId) {
+  if (!messageId) {
+    return;
+  }
+
+  profanityDeleteLogSkipMap.delete(messageId);
+}
+
+function consumeProfanityDeleteLogSkip(messageId) {
+  if (!messageId) {
+    return false;
+  }
+
+  const now = Date.now();
+  pruneProfanityDeleteLogSkipEntries(now);
+  const expiresAt = profanityDeleteLogSkipMap.get(messageId);
+
+  if (!expiresAt || expiresAt <= now) {
+    return false;
+  }
+
+  profanityDeleteLogSkipMap.delete(messageId);
+  return true;
 }
 
 async function handleVoiceJoinLeaveLog(oldState, newState) {
@@ -4030,7 +4079,14 @@ async function handleProfanityModerationMessage(message) {
     return false;
   }
 
-  await message.delete().catch(() => null);
+  markProfanityDeleteLogSkip(message.id);
+  const didDelete = await message.delete().then(() => true).catch(() => false);
+
+  if (!didDelete) {
+    clearProfanityDeleteLogSkip(message.id);
+    return false;
+  }
+
   return true;
 }
 
