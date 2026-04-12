@@ -1,0 +1,9 @@
+export const POLL_COMMAND_NAME = "투표";
+export const POLL_CREATE_MODAL_PREFIX = "dongbot:poll-create:";
+export const POLL_BUTTON_PREFIX = "dongbot:poll:";
+export const POLL_MAX_OPTIONS = 10;
+export const POLL_MAX_VISIBLE_VOTERS = 8;
+export const POLL_SUBJECT_FIELD_ID = "poll-subject";
+export const POLL_OPTIONS_FIELD_ID = "poll-options";
+export const POLL_VISIBILITY_ANONYMOUS = "anonymous";
+export const POLL_VISIBILITY_PUBLIC = "public";

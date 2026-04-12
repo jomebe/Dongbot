@@ -1,0 +1,21 @@
+{
+  "name": "dongbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/firebase.js && node --check src/features/poll/pollConstants.js && node --check src/features/poll/pollUtils.js && node --check src/utils/interactionUtils.js && node --check src/store/guildConfigStore.js && node --check src/store/ttsConfigStore.js && node --check src/store/ttsGuildConfigStore.js && node --check src/store/loggingConfigStore.js && node --check src/store/pollStore.js"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.21.0",
+    "dotenv": "^16.5.0",
+    "firebase": "^11.7.1",
+    "msedge-tts": "^2.0.4",
+    "tweetnacl": "^1.0.3"
+  }
+}
