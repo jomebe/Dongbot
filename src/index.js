@@ -33,6 +33,7 @@ import {
 
 import {
   discordToken,
+  neisApiKey,
   roomGeneratorChannelName,
   roomPrefix,
 } from "./config.js";
@@ -128,6 +129,14 @@ import {
   getDefaultProfanityTermsByLevel,
 } from "./features/profanity/profanityUtils.js";
 import {
+  formatMealText,
+  formatTimetableRows,
+  getMealInfoBySchool,
+  getTimetableBySchool,
+  parseNeisDateInput,
+  resolveSchoolInfo,
+} from "./features/school/neisUtils.js";
+import {
   safeDeferEphemeral,
   safeInteractionDeleteReply,
   safeInteractionEditReply,
@@ -159,6 +168,14 @@ const LEAVE_VOICE_COMMAND_NAME = "나가";
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
+const MEAL_COMMAND_NAME = "급식";
+const TIMETABLE_COMMAND_NAME = "시간표";
+const SCHOOL_CHECK_SUBCOMMAND_NAME = "확인";
+const SCHOOL_NAME_OPTION = "학교명";
+const SCHOOL_DATE_OPTION = "날짜";
+const SCHOOL_OFFICE_OPTION = "교육청";
+const TIMETABLE_GRADE_OPTION = "학년";
+const TIMETABLE_CLASS_OPTION = "반";
 const TTS_ACTION_SUBCOMMAND_NAME = "실행";
 const TTS_TEST_RUN_SUBCOMMAND_NAME = "실행";
 const SETUP_OPEN_SUBCOMMAND_NAME = "열기";
@@ -387,6 +404,90 @@ const setupCommand = new SlashCommandBuilder()
       .setDescription("초기설정 패널을 엽니다"),
   );
 
+const mealCommand = new SlashCommandBuilder()
+  .setName(MEAL_COMMAND_NAME)
+  .setDescription("학교 급식 정보를 조회합니다")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(SCHOOL_CHECK_SUBCOMMAND_NAME)
+      .setDescription("급식 확인")
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_NAME_OPTION)
+          .setDescription("학교 이름")
+          .setRequired(true)
+          .setMinLength(2)
+          .setMaxLength(50),
+      )
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_DATE_OPTION)
+          .setDescription("조회 날짜 (오늘/내일 또는 YYYYMMDD)")
+          .setRequired(false)
+          .setMinLength(1)
+          .setMaxLength(20),
+      )
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_OFFICE_OPTION)
+          .setDescription("교육청명으로 학교 검색 범위 좁히기 (선택)")
+          .setRequired(false)
+          .setMinLength(2)
+          .setMaxLength(30),
+      ),
+  );
+
+const timetableCommand = new SlashCommandBuilder()
+  .setName(TIMETABLE_COMMAND_NAME)
+  .setDescription("학교 시간표를 조회합니다")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(SCHOOL_CHECK_SUBCOMMAND_NAME)
+      .setDescription("시간표 확인")
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_NAME_OPTION)
+          .setDescription("학교 이름")
+          .setRequired(true)
+          .setMinLength(2)
+          .setMaxLength(50),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName(TIMETABLE_GRADE_OPTION)
+          .setDescription("학년")
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(6),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName(TIMETABLE_CLASS_OPTION)
+          .setDescription("반")
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(30),
+      )
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_DATE_OPTION)
+          .setDescription("조회 날짜 (오늘/내일 또는 YYYYMMDD)")
+          .setRequired(false)
+          .setMinLength(1)
+          .setMaxLength(20),
+      )
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_OFFICE_OPTION)
+          .setDescription("교육청명으로 학교 검색 범위 좁히기 (선택)")
+          .setRequired(false)
+          .setMinLength(2)
+          .setMaxLength(30),
+      ),
+  );
+
 const pollCommand = new SlashCommandBuilder()
   .setName(POLL_COMMAND_NAME)
   .setDescription("특정 채널에 투표를 생성합니다")
@@ -563,6 +664,16 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === SETUP_COMMAND_NAME) {
         await handleSetupCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === MEAL_COMMAND_NAME) {
+        await handleMealCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === TIMETABLE_COMMAND_NAME) {
+        await handleTimetableCommand(interaction);
         return;
       }
 
@@ -916,6 +1027,8 @@ async function registerGuildCommands(guild) {
     ttsCommand.toJSON(),
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
+    mealCommand.toJSON(),
+    timetableCommand.toJSON(),
     pollCommand.toJSON(),
     queueCommand.toJSON(),
     rolePanelCommand.toJSON(),
@@ -2285,6 +2398,193 @@ function formatDuration(ms) {
   }
 
   return parts.join(", ");
+}
+
+function truncateForDiscord(content, maxLength = 1800) {
+  if (typeof content !== "string") {
+    return "";
+  }
+
+  if (content.length <= maxLength) {
+    return content;
+  }
+
+  return `${content.slice(0, maxLength - 12)}\n...생략됨`;
+}
+
+async function handleMealCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+    const subcommand = interaction.options.getSubcommand(false);
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (subcommand && subcommand !== SCHOOL_CHECK_SUBCOMMAND_NAME) {
+      await safeInteractionReply(interaction, {
+        content: "알 수 없는 급식 명령어예요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const schoolName = interaction.options.getString(SCHOOL_NAME_OPTION, true);
+    const rawDateInput = interaction.options.getString(SCHOOL_DATE_OPTION, false);
+    const educationOfficeName = interaction.options.getString(
+      SCHOOL_OFFICE_OPTION,
+      false,
+    );
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const requestedDate = parseNeisDateInput(rawDateInput);
+    const school = await resolveSchoolInfo({
+      apiKey: neisApiKey,
+      schoolName,
+      educationOfficeName,
+    });
+    const meal = await getMealInfoBySchool({
+      apiKey: neisApiKey,
+      school,
+      ymd: requestedDate.ymd,
+    });
+
+    if (!meal) {
+      await safeInteractionEditReply(interaction, {
+        content:
+          `[${requestedDate.label}] ${school.SCHUL_NM} 급식 정보가 없어요.\n` +
+          `(${school.ATPT_OFCDC_SC_NM})`,
+      });
+      return;
+    }
+
+    const mealName = String(meal.MMEAL_SC_NM ?? "급식").trim() || "급식";
+    const mealText = formatMealText(meal.DDISH_NM);
+    const calories =
+      typeof meal.CAL_INFO === "string" && meal.CAL_INFO.trim()
+        ? `\n칼로리: ${meal.CAL_INFO.trim()}`
+        : "";
+
+    await safeInteractionEditReply(interaction, {
+      content: truncateForDiscord(
+        `🍽️ [${requestedDate.label}] ${school.SCHUL_NM} (${school.ATPT_OFCDC_SC_NM})\n` +
+          `${mealName}\n\n${mealText}${calories}`,
+      ),
+    });
+  } catch (error) {
+    console.error("급식 조회 실패", error);
+
+    const message =
+      error instanceof Error ? error.message : "급식 조회 중 오류가 발생했어요.";
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: message,
+      });
+      return;
+    }
+
+    await safeInteractionReply(interaction, {
+      content: message,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
+async function handleTimetableCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+    const subcommand = interaction.options.getSubcommand(false);
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (subcommand && subcommand !== SCHOOL_CHECK_SUBCOMMAND_NAME) {
+      await safeInteractionReply(interaction, {
+        content: "알 수 없는 시간표 명령어예요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const schoolName = interaction.options.getString(SCHOOL_NAME_OPTION, true);
+    const grade = interaction.options.getInteger(TIMETABLE_GRADE_OPTION, true);
+    const classNumber = interaction.options.getInteger(TIMETABLE_CLASS_OPTION, true);
+    const rawDateInput = interaction.options.getString(SCHOOL_DATE_OPTION, false);
+    const educationOfficeName = interaction.options.getString(
+      SCHOOL_OFFICE_OPTION,
+      false,
+    );
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const requestedDate = parseNeisDateInput(rawDateInput);
+    const school = await resolveSchoolInfo({
+      apiKey: neisApiKey,
+      schoolName,
+      educationOfficeName,
+    });
+    const timetableRows = await getTimetableBySchool({
+      apiKey: neisApiKey,
+      school,
+      ymd: requestedDate.ymd,
+      grade,
+      classNm: classNumber,
+    });
+
+    if (timetableRows.length === 0) {
+      await safeInteractionEditReply(interaction, {
+        content:
+          `[${requestedDate.label}] ${school.SCHUL_NM} ${grade}학년 ${classNumber}반 시간표 정보가 없어요.\n` +
+          `(${school.ATPT_OFCDC_SC_NM})`,
+      });
+      return;
+    }
+
+    const tableText = formatTimetableRows(timetableRows);
+
+    await safeInteractionEditReply(interaction, {
+      content: truncateForDiscord(
+        `📚 [${requestedDate.label}] ${school.SCHUL_NM} (${school.ATPT_OFCDC_SC_NM})\n` +
+          `${grade}학년 ${classNumber}반 시간표\n\n${tableText}`,
+      ),
+    });
+  } catch (error) {
+    console.error("시간표 조회 실패", error);
+
+    const message =
+      error instanceof Error ? error.message : "시간표 조회 중 오류가 발생했어요.";
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: message,
+      });
+      return;
+    }
+
+    await safeInteractionReply(interaction, {
+      content: message,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 }
 
 async function handlePollCommand(interaction) {

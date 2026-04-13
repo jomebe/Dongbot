@@ -18,6 +18,8 @@ export const roomGeneratorChannelName =
   process.env.BOT_ROOM_GENERATOR_CHANNEL_NAME ?? "방 생성";
 
 export const roomPrefix = process.env.BOT_ROOM_PREFIX ?? "음성 수다방";
+export const neisApiKey =
+  process.env.NEIS_API_KEY ?? "d1c3d45db6004d0199fc445ba2510657";
 
 const firebaseApiKey = getRequiredEnv("FIREBASE_API_KEY");
 const firebaseAuthDomain = getRequiredEnv("FIREBASE_AUTH_DOMAIN");
