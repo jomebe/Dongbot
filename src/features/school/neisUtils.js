@@ -1,4 +1,4 @@
-const NEIS_API_BASE_URL = "https://open.neis.go.kr/hub";
+const NEIS_API_BASE_URL = "https://open.neis.go.kr/hub/";
 const SCHOOL_SEARCH_CACHE = new Map();
 
 function getRows(payload, datasetName) {
@@ -32,7 +32,9 @@ async function fetchNeisJson(pathname, query) {
   const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`나이스 API 요청 실패 (${response.status})`);
+    throw new Error(
+      `나이스 API 요청 실패 (${response.status}): ${url.toString()}`,
+    );
   }
 
   return response.json();
