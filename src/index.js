@@ -78,6 +78,10 @@ import {
   updateAutoRoleConfig,
 } from "./store/autoRoleConfigStore.js";
 import {
+  getSchoolConfig,
+  updateSchoolConfig,
+} from "./store/schoolConfigStore.js";
+import {
   getProfanityConfig,
   setProfanityChannelEnabled,
   updateProfanityConfig,
@@ -168,6 +172,7 @@ const LEAVE_VOICE_COMMAND_NAME = "나가";
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
+const SCHOOL_COMMAND_NAME = "학교";
 const MEAL_COMMAND_NAME = "급식";
 const TIMETABLE_COMMAND_NAME = "시간표";
 const SCHOOL_CHECK_SUBCOMMAND_NAME = "확인";
@@ -404,6 +409,27 @@ const setupCommand = new SlashCommandBuilder()
       .setDescription("초기설정 패널을 엽니다"),
   );
 
+const schoolCommand = new SlashCommandBuilder()
+  .setName(SCHOOL_COMMAND_NAME)
+  .setDescription("급식/시간표 기본 학교를 설정합니다")
+  .setDMPermission(false)
+  .addStringOption((option) =>
+    option
+      .setName(SCHOOL_NAME_OPTION)
+      .setDescription("기본으로 사용할 학교 이름")
+      .setRequired(true)
+      .setMinLength(2)
+      .setMaxLength(50),
+  )
+  .addStringOption((option) =>
+    option
+      .setName(SCHOOL_OFFICE_OPTION)
+      .setDescription("교육청명 (학교명 중복 시 권장)")
+      .setRequired(false)
+      .setMinLength(2)
+      .setMaxLength(30),
+  );
+
 const mealCommand = new SlashCommandBuilder()
   .setName(MEAL_COMMAND_NAME)
   .setDescription("학교 급식 정보를 조회합니다")
@@ -415,8 +441,8 @@ const mealCommand = new SlashCommandBuilder()
       .addStringOption((option) =>
         option
           .setName(SCHOOL_NAME_OPTION)
-          .setDescription("학교 이름")
-          .setRequired(true)
+          .setDescription("학교 이름 (미입력 시 /학교 설정값 사용)")
+          .setRequired(false)
           .setMinLength(2)
           .setMaxLength(50),
       )
@@ -449,8 +475,8 @@ const timetableCommand = new SlashCommandBuilder()
       .addStringOption((option) =>
         option
           .setName(SCHOOL_NAME_OPTION)
-          .setDescription("학교 이름")
-          .setRequired(true)
+          .setDescription("학교 이름 (미입력 시 /학교 설정값 사용)")
+          .setRequired(false)
           .setMinLength(2)
           .setMaxLength(50),
       )
@@ -664,6 +690,11 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === SETUP_COMMAND_NAME) {
         await handleSetupCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === SCHOOL_COMMAND_NAME) {
+        await handleSchoolCommand(interaction);
         return;
       }
 
@@ -1027,6 +1058,7 @@ async function registerGuildCommands(guild) {
     ttsCommand.toJSON(),
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
+    schoolCommand.toJSON(),
     mealCommand.toJSON(),
     timetableCommand.toJSON(),
     pollCommand.toJSON(),
@@ -2412,6 +2444,117 @@ function truncateForDiscord(content, maxLength = 1800) {
   return `${content.slice(0, maxLength - 12)}\n...생략됨`;
 }
 
+async function resolveSchoolLookupInput({
+  guildId,
+  schoolNameInput,
+  educationOfficeNameInput,
+}) {
+  const savedConfig = await getSchoolConfig(guildId);
+
+  const providedSchoolName =
+    typeof schoolNameInput === "string" ? schoolNameInput.trim() : "";
+  const providedOfficeName =
+    typeof educationOfficeNameInput === "string"
+      ? educationOfficeNameInput.trim()
+      : "";
+
+  const schoolName = providedSchoolName || savedConfig.schoolName || "";
+
+  if (!schoolName) {
+    throw new Error(
+      "기본 학교가 설정되지 않았어요. 먼저 /학교에서 학교명을 설정하거나 명령어에 학교명을 입력해 주세요.",
+    );
+  }
+
+  const educationOfficeName = providedOfficeName
+    ? providedOfficeName
+    : providedSchoolName
+      ? null
+      : savedConfig.educationOfficeName;
+
+  return {
+    schoolName,
+    educationOfficeName,
+  };
+}
+
+async function handleSchoolCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const hasAdminPermission = await isAdminUser(guild, interaction.user.id);
+
+    if (!hasAdminPermission) {
+      await safeInteractionReply(interaction, {
+        content: "서버 관리자만 기본 학교를 설정할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const schoolNameInput = interaction.options.getString(SCHOOL_NAME_OPTION, true);
+    const educationOfficeNameInput = interaction.options.getString(
+      SCHOOL_OFFICE_OPTION,
+      false,
+    );
+
+    const schoolName = schoolNameInput.trim();
+    const educationOfficeName =
+      typeof educationOfficeNameInput === "string" &&
+      educationOfficeNameInput.trim()
+        ? educationOfficeNameInput.trim()
+        : null;
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    const school = await resolveSchoolInfo({
+      apiKey: neisApiKey,
+      schoolName,
+      educationOfficeName,
+    });
+
+    await updateSchoolConfig(guild.id, {
+      schoolName: school.SCHUL_NM,
+      educationOfficeName: school.ATPT_OFCDC_SC_NM,
+    });
+
+    await safeInteractionEditReply(interaction, {
+      content:
+        `기본 학교를 ${school.SCHUL_NM} (${school.ATPT_OFCDC_SC_NM})로 설정했어요.\n` +
+        "이제 /급식 확인, /시간표 확인에서 학교명을 생략할 수 있어요.",
+    });
+  } catch (error) {
+    console.error("학교 설정 실패", error);
+
+    const message =
+      error instanceof Error ? error.message : "학교 설정 중 오류가 발생했어요.";
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, {
+        content: message,
+      });
+      return;
+    }
+
+    await safeInteractionReply(interaction, {
+      content: message,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
 async function handleMealCommand(interaction) {
   try {
     const guild = interaction.guild;
@@ -2433,9 +2576,12 @@ async function handleMealCommand(interaction) {
       return;
     }
 
-    const schoolName = interaction.options.getString(SCHOOL_NAME_OPTION, true);
+    const schoolNameInput = interaction.options.getString(
+      SCHOOL_NAME_OPTION,
+      false,
+    );
     const rawDateInput = interaction.options.getString(SCHOOL_DATE_OPTION, false);
-    const educationOfficeName = interaction.options.getString(
+    const educationOfficeNameInput = interaction.options.getString(
       SCHOOL_OFFICE_OPTION,
       false,
     );
@@ -2446,11 +2592,16 @@ async function handleMealCommand(interaction) {
       return;
     }
 
+    const schoolLookupInput = await resolveSchoolLookupInput({
+      guildId: guild.id,
+      schoolNameInput,
+      educationOfficeNameInput,
+    });
     const requestedDate = parseNeisDateInput(rawDateInput);
     const school = await resolveSchoolInfo({
       apiKey: neisApiKey,
-      schoolName,
-      educationOfficeName,
+      schoolName: schoolLookupInput.schoolName,
+      educationOfficeName: schoolLookupInput.educationOfficeName,
     });
     const meal = await getMealInfoBySchool({
       apiKey: neisApiKey,
@@ -2521,11 +2672,14 @@ async function handleTimetableCommand(interaction) {
       return;
     }
 
-    const schoolName = interaction.options.getString(SCHOOL_NAME_OPTION, true);
+    const schoolNameInput = interaction.options.getString(
+      SCHOOL_NAME_OPTION,
+      false,
+    );
     const grade = interaction.options.getInteger(TIMETABLE_GRADE_OPTION, true);
     const classNumber = interaction.options.getInteger(TIMETABLE_CLASS_OPTION, true);
     const rawDateInput = interaction.options.getString(SCHOOL_DATE_OPTION, false);
-    const educationOfficeName = interaction.options.getString(
+    const educationOfficeNameInput = interaction.options.getString(
       SCHOOL_OFFICE_OPTION,
       false,
     );
@@ -2536,11 +2690,16 @@ async function handleTimetableCommand(interaction) {
       return;
     }
 
+    const schoolLookupInput = await resolveSchoolLookupInput({
+      guildId: guild.id,
+      schoolNameInput,
+      educationOfficeNameInput,
+    });
     const requestedDate = parseNeisDateInput(rawDateInput);
     const school = await resolveSchoolInfo({
       apiKey: neisApiKey,
-      schoolName,
-      educationOfficeName,
+      schoolName: schoolLookupInput.schoolName,
+      educationOfficeName: schoolLookupInput.educationOfficeName,
     });
     const timetableRows = await getTimetableBySchool({
       apiKey: neisApiKey,
