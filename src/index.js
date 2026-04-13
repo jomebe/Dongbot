@@ -181,6 +181,8 @@ const SETUP_JOIN_LEAVE_ALERT_BUTTON_PREFIX =
   "dongbot:setup-joinleave-alert-open:";
 const SETUP_JOIN_LEAVE_ALERT_MODAL_PREFIX =
   "dongbot:setup-joinleave-alert-modal:";
+const SETUP_JOIN_LEAVE_ALERT_ROLE_PREFIX =
+  "dongbot:setup-joinleave-alert-role:";
 const SETUP_CHAT_LOG_SETTINGS_BUTTON_PREFIX =
   "dongbot:setup-chatlog-settings-open:";
 const SETUP_TTS_MODE_CHANNEL_PREFIX = "dongbot:setup-tts-mode-channel:";
@@ -481,86 +483,44 @@ const rolePanelCommand = new SlashCommandBuilder()
 
 const profanityCommand = new SlashCommandBuilder()
   .setName(PROFANITY_COMMAND_NAME)
-  .setDescription("욕설 감지 설정을 인자로 선택해 실행합니다")
+  .setDescription("현재 채널 욕설감지 ON/OFF 및 옵션 설정")
   .setDMPermission(false)
   .addStringOption((option) =>
     option
-      .setName(PROFANITY_CATEGORY_OPTION_NAME)
-      .setDescription("무엇을 설정할지 선택")
-      .setRequired(true)
-      .addChoices(
-        {
-          name: "채널 (현재 채널 감지 ON/OFF/상태)",
-          value: PROFANITY_CHANNEL_GROUP_NAME,
-        },
-        {
-          name: "강도 (검열 강도 상태/설정)",
-          value: PROFANITY_LEVEL_GROUP_NAME,
-        },
-        {
-          name: "단어 (금칙어 추가/삭제/목록)",
-          value: PROFANITY_WORD_GROUP_NAME,
-        },
-        {
-          name: "예외 (허용 단어 추가/삭제/목록)",
-          value: PROFANITY_EXCEPTION_GROUP_NAME,
-        },
-      ),
-  )
-  .addStringOption((option) =>
-    option
       .setName(PROFANITY_ACTION_OPTION_NAME)
-      .setDescription("카테고리에서 수행할 동작")
+      .setDescription("필수: 켜기 또는 끄기")
       .setRequired(true)
       .addChoices(
-        {
-          name: "켜기 (채널에서 감지 시작)",
-          value: PROFANITY_ENABLE_SUBCOMMAND_NAME,
-        },
-        {
-          name: "끄기 (채널에서 감지 중지)",
-          value: PROFANITY_DISABLE_SUBCOMMAND_NAME,
-        },
-        {
-          name: "상태 (현재 설정 확인)",
-          value: PROFANITY_STATUS_SUBCOMMAND_NAME,
-        },
-        {
-          name: "설정 (강도값 변경)",
-          value: PROFANITY_LEVEL_SET_SUBCOMMAND_NAME,
-        },
-        {
-          name: "추가 (단어/예외 추가)",
-          value: PROFANITY_ADD_SUBCOMMAND_NAME,
-        },
-        {
-          name: "삭제 (단어/예외 삭제)",
-          value: PROFANITY_REMOVE_SUBCOMMAND_NAME,
-        },
-        {
-          name: "목록 (단어/예외 목록 조회)",
-          value: PROFANITY_LIST_SUBCOMMAND_NAME,
-        },
+        { name: "켜기", value: PROFANITY_ENABLE_SUBCOMMAND_NAME },
+        { name: "끄기", value: PROFANITY_DISABLE_SUBCOMMAND_NAME },
       ),
   )
   .addStringOption((option) =>
     option
       .setName(PROFANITY_LEVEL_OPTION_NAME)
-      .setDescription("강도/단어 리스트 등급 (강도:설정, 단어:추가/삭제/목록)")
+      .setDescription("선택: 켜기일 때 적용할 강도")
       .setRequired(false)
       .addChoices(
-        { name: "낮음 (대표 욕설 중심)", value: PROFANITY_LEVEL_LOW_VALUE },
-        { name: "보통 (변형/비하 포함)", value: PROFANITY_LEVEL_MEDIUM_VALUE },
-        { name: "높음 (성적/집단 비하 포함)", value: PROFANITY_LEVEL_HIGH_VALUE },
+        { name: "낮음", value: PROFANITY_LEVEL_LOW_VALUE },
+        { name: "보통", value: PROFANITY_LEVEL_MEDIUM_VALUE },
+        { name: "높음", value: PROFANITY_LEVEL_HIGH_VALUE },
       ),
   )
   .addStringOption((option) =>
     option
-      .setName(PROFANITY_VALUE_OPTION_NAME)
-      .setDescription("추가/삭제할 단어 값 (동작이 추가/삭제일 때 사용)")
+      .setName(PROFANITY_WORD_GROUP_NAME)
+      .setDescription("선택: 켜기일 때 추가할 금칙어(쉼표로 여러 개)")
       .setRequired(false)
       .setMinLength(1)
-      .setMaxLength(30),
+      .setMaxLength(300),
+  )
+  .addStringOption((option) =>
+    option
+      .setName(PROFANITY_EXCEPTION_GROUP_NAME)
+      .setDescription("선택: 켜기일 때 추가할 예외 단어(쉼표로 여러 개)")
+      .setRequired(false)
+      .setMinLength(1)
+      .setMaxLength(300),
   );
 
 client.once("clientReady", async () => {
@@ -1237,6 +1197,19 @@ function buildAutoRoleRoleSelectRow(guildId, autoRoleConfig) {
   );
 }
 
+function buildJoinLeaveAlertRoleSelectRow(guildId, loggingConfig) {
+  return new ActionRowBuilder().addComponents(
+    new RoleSelectMenuBuilder()
+      .setCustomId(`${SETUP_JOIN_LEAVE_ALERT_ROLE_PREFIX}${guildId}`)
+      .setPlaceholder("들낙 반복 감지 시 멘션할 역할 선택 (비우면 해제)")
+      .setDefaultRoles(
+        loggingConfig.joinLeaveAlertRoleId ? [loggingConfig.joinLeaveAlertRoleId] : [],
+      )
+      .setMinValues(0)
+      .setMaxValues(1),
+  );
+}
+
 function buildRoomCategorySelectRow(guildId, roomConfig) {
   return new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
@@ -1363,6 +1336,7 @@ async function handleSetupButtonInteraction(interaction) {
       content: "들낙로그 설정",
       components: [
         buildJoinLeaveChannelSelectRow(interaction.guild.id, currentLoggingConfig),
+        buildJoinLeaveAlertRoleSelectRow(interaction.guild.id, currentLoggingConfig),
         alertRow,
       ],
       flags: MessageFlags.Ephemeral,
@@ -1575,17 +1549,8 @@ async function handleSetupButtonInteraction(interaction) {
       .setPlaceholder("예: 3")
       .setValue(String(current.joinLeaveAlertThreshold));
 
-    const roleInput = new TextInputBuilder()
-      .setCustomId("role")
-      .setLabel("멘션할 역할(멘션 또는 역할 ID, 비우면 해제)")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(false)
-      .setPlaceholder("예: <@&1234567890>")
-      .setValue(current.joinLeaveAlertRoleId ?? "");
-
     modal.addComponents(
       new ActionRowBuilder().addComponents(thresholdInput),
-      new ActionRowBuilder().addComponents(roleInput),
     );
 
     await interaction.showModal(modal);
@@ -1651,7 +1616,12 @@ async function handleSetupTtsButtonInteraction(interaction) {
 async function handleSetupRoleSelectInteraction(interaction) {
   const customId = interaction.customId;
 
-  if (!customId.startsWith(SETUP_AUTO_ROLE_ROLE_PREFIX)) {
+  const isAutoRoleSelect = customId.startsWith(SETUP_AUTO_ROLE_ROLE_PREFIX);
+  const isJoinLeaveAlertRoleSelect = customId.startsWith(
+    SETUP_JOIN_LEAVE_ALERT_ROLE_PREFIX,
+  );
+
+  if (!isAutoRoleSelect && !isJoinLeaveAlertRoleSelect) {
     return;
   }
 
@@ -1678,22 +1648,61 @@ async function handleSetupRoleSelectInteraction(interaction) {
     return;
   }
 
-  const selectedRoleId = interaction.values[0];
+  const selectedRoleId = interaction.values[0] ?? null;
+
+  if (isAutoRoleSelect) {
+    if (!selectedRoleId) {
+      await interaction.reply({
+        content: "자동 지급 역할을 선택해 주세요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (selectedRoleId === interaction.guild.id) {
+      await interaction.reply({
+        content: "@everyone 역할은 자동 지급 대상으로 설정할 수 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await updateAutoRoleConfig(interaction.guild.id, {
+      joinRoleId: selectedRoleId,
+    });
+
+    await interaction.reply({
+      content: `자동 역할을 <@&${selectedRoleId}> 로 설정했어요.`,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: {
+        roles: [selectedRoleId],
+      },
+    });
+    return;
+  }
 
   if (selectedRoleId === interaction.guild.id) {
     await interaction.reply({
-      content: "@everyone 역할은 자동 지급 대상으로 설정할 수 없어요.",
+      content: "@everyone 역할은 들낙 멘션 대상으로 설정할 수 없어요.",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  await updateAutoRoleConfig(interaction.guild.id, {
-    joinRoleId: selectedRoleId,
+  await updateLoggingConfig(interaction.guild.id, {
+    joinLeaveAlertRoleId: selectedRoleId,
   });
 
+  if (!selectedRoleId) {
+    await interaction.reply({
+      content: "들낙 멘션 역할을 해제했어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   await interaction.reply({
-    content: `자동 역할을 <@&${selectedRoleId}> 로 설정했어요.`,
+    content: `들낙 멘션 역할을 <@&${selectedRoleId}> 로 설정했어요.`,
     flags: MessageFlags.Ephemeral,
     allowedMentions: {
       roles: [selectedRoleId],
@@ -1819,7 +1828,6 @@ async function handleJoinLeaveAlertModalSubmit(interaction) {
   }
 
   const thresholdRaw = interaction.fields.getTextInputValue("threshold").trim();
-  const roleRaw = interaction.fields.getTextInputValue("role").trim();
 
   if (!/^\d+$/.test(thresholdRaw)) {
     await interaction.reply({
@@ -1839,33 +1847,24 @@ async function handleJoinLeaveAlertModalSubmit(interaction) {
     return;
   }
 
-  let roleId = null;
-
-  if (roleRaw) {
-    const mentionMatch = /^<@&(\d+)>$/.exec(roleRaw);
-    const idMatch = /^(\d+)$/.exec(roleRaw);
-
-    roleId = mentionMatch?.[1] ?? idMatch?.[1] ?? null;
-
-    if (!roleId || !interaction.guild.roles.cache.has(roleId)) {
-      await interaction.reply({
-        content: "역할 입력은 역할 멘션 또는 역할 ID로 입력해 주세요.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-  }
+  const current = await getLoggingConfig(interaction.guild.id);
 
   await updateLoggingConfig(interaction.guild.id, {
     joinLeaveAlertThreshold: threshold,
-    joinLeaveAlertRoleId: roleId,
   });
 
-  const roleSummary = roleId ? `<@&${roleId}>` : "없음";
+  const roleSummary = current.joinLeaveAlertRoleId
+    ? `<@&${current.joinLeaveAlertRoleId}>`
+    : "없음";
 
   await interaction.reply({
-    content: `들낙 멘션 설정 완료: ${threshold}회 이상일 때 ${roleSummary}`,
+    content:
+      `들낙 멘션 설정 완료: ${threshold}회 이상일 때 ${roleSummary}\n` +
+      "멘션 역할은 들낙로그 설정의 역할 선택 메뉴에서 변경할 수 있어요.",
     flags: MessageFlags.Ephemeral,
+    allowedMentions: current.joinLeaveAlertRoleId
+      ? { roles: [current.joinLeaveAlertRoleId] }
+      : undefined,
   });
 }
 
@@ -3408,10 +3407,6 @@ async function handleRolePanelCommand(interaction) {
 async function handleProfanityCommand(interaction) {
   try {
     const guild = interaction.guild;
-    const category = interaction.options.getString(
-      PROFANITY_CATEGORY_OPTION_NAME,
-      true,
-    );
     const action = interaction.options.getString(
       PROFANITY_ACTION_OPTION_NAME,
       true,
@@ -3420,8 +3415,12 @@ async function handleProfanityCommand(interaction) {
       PROFANITY_LEVEL_OPTION_NAME,
       false,
     );
-    const rawValueInput = interaction.options.getString(
-      PROFANITY_VALUE_OPTION_NAME,
+    const rawWordsInput = interaction.options.getString(
+      PROFANITY_WORD_GROUP_NAME,
+      false,
+    );
+    const rawExceptionInput = interaction.options.getString(
+      PROFANITY_EXCEPTION_GROUP_NAME,
       false,
     );
 
@@ -3433,12 +3432,9 @@ async function handleProfanityCommand(interaction) {
       return;
     }
 
-    if (
-      category === PROFANITY_CHANNEL_GROUP_NAME &&
-      !isProfanityTargetChannel(interaction.channel)
-    ) {
+    if (!isProfanityTargetChannel(interaction.channel)) {
       await safeInteractionReply(interaction, {
-        content: "채널 카테고리는 텍스트 채널에서만 설정할 수 있어요.",
+        content: "욕설감지는 텍스트 채널에서만 설정할 수 있어요.",
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -3463,310 +3459,122 @@ async function handleProfanityCommand(interaction) {
     const channelId = interaction.channelId;
     const channelMention = `<#${channelId}>`;
     const profanityConfig = await getProfanityConfig(guild.id);
+    const alreadyEnabled = profanityConfig.enabledChannelIds.includes(channelId);
 
-    if (category === PROFANITY_CHANNEL_GROUP_NAME) {
-      const alreadyEnabled = profanityConfig.enabledChannelIds.includes(channelId);
-
-      if (action === PROFANITY_STATUS_SUBCOMMAND_NAME) {
+    if (action === PROFANITY_DISABLE_SUBCOMMAND_NAME) {
+      if (!alreadyEnabled) {
         await safeInteractionEditReply(interaction, {
-          content:
-            `${channelMention} 욕설감지 상태: ` +
-            `${alreadyEnabled ? "켜짐" : "꺼짐"}`,
+          content: `${channelMention}은(는) 이미 욕설감지가 꺼져 있어요.`,
         });
         return;
       }
 
-      if (action === PROFANITY_ENABLE_SUBCOMMAND_NAME) {
-        if (alreadyEnabled) {
-          await safeInteractionEditReply(interaction, {
-            content: `${channelMention}은(는) 이미 욕설감지가 켜져 있어요.`,
-          });
-          return;
-        }
-
-        await setProfanityChannelEnabled(guild.id, channelId, true);
-
-        await safeInteractionEditReply(interaction, {
-          content:
-            `${channelMention}에서 욕설감지를 켰어요. ` +
-            "감지된 메시지는 바로 삭제됩니다.",
-        });
-        return;
-      }
-
-      if (action === PROFANITY_DISABLE_SUBCOMMAND_NAME) {
-        if (!alreadyEnabled) {
-          await safeInteractionEditReply(interaction, {
-            content: `${channelMention}은(는) 이미 욕설감지가 꺼져 있어요.`,
-          });
-          return;
-        }
-
-        await setProfanityChannelEnabled(guild.id, channelId, false);
-
-        await safeInteractionEditReply(interaction, {
-          content: `${channelMention}에서 욕설감지를 껐어요.`,
-        });
-        return;
-      }
+      await setProfanityChannelEnabled(guild.id, channelId, false);
 
       await safeInteractionEditReply(interaction, {
-        content: "채널 카테고리에서는 켜기/끄기/상태만 사용할 수 있어요.",
+        content: `${channelMention}에서 욕설감지를 껐어요.`,
       });
       return;
     }
 
-    if (category === PROFANITY_LEVEL_GROUP_NAME) {
-      if (action === PROFANITY_STATUS_SUBCOMMAND_NAME) {
-        await safeInteractionEditReply(interaction, {
-          content:
-            "현재 검열 강도: " +
-            `${getProfanityLevelLabel(profanityConfig.moderationLevel)}`,
-        });
-        return;
-      }
-
-      if (action === PROFANITY_LEVEL_SET_SUBCOMMAND_NAME) {
-        if (!isProfanityLevelValue(selectedLevel)) {
-          await safeInteractionEditReply(interaction, {
-            content: "검열 강도 값이 올바르지 않아요.",
-          });
-          return;
-        }
-
-        if (selectedLevel === profanityConfig.moderationLevel) {
-          await safeInteractionEditReply(interaction, {
-            content:
-              "이미 해당 강도로 설정되어 있어요: " +
-              `${getProfanityLevelLabel(selectedLevel)}`,
-          });
-          return;
-        }
-
-        await updateProfanityConfig(guild.id, {
-          moderationLevel: selectedLevel,
-        });
-
-        await safeInteractionEditReply(interaction, {
-          content:
-            "검열 강도를 변경했어요: " +
-            `${getProfanityLevelLabel(selectedLevel)}`,
-        });
-        return;
-      }
-
+    if (action !== PROFANITY_ENABLE_SUBCOMMAND_NAME) {
       await safeInteractionEditReply(interaction, {
-        content: "강도 카테고리에서는 상태/설정만 사용할 수 있어요.",
+        content: "동작은 켜기/끄기만 사용할 수 있어요.",
       });
       return;
     }
 
-    if (category === PROFANITY_WORD_GROUP_NAME) {
-      const defaultTermsByLevel = getDefaultProfanityTermsByLevel();
-      const mergedTermsByLevel = buildMergedProfanityTermsByLevel(
-        profanityConfig,
-        defaultTermsByLevel,
+    const wordsToAdd = parseProfanityTermListInput(rawWordsInput);
+    const exceptionsToAdd = parseProfanityTermListInput(rawExceptionInput);
+
+    if (rawWordsInput && wordsToAdd.length === 0) {
+      await safeInteractionEditReply(interaction, {
+        content: "단어 옵션에는 한글/영문 글자가 포함된 단어를 입력해 주세요.",
+      });
+      return;
+    }
+
+    if (rawExceptionInput && exceptionsToAdd.length === 0) {
+      await safeInteractionEditReply(interaction, {
+        content: "예외 옵션에는 한글/영문 글자가 포함된 단어를 입력해 주세요.",
+      });
+      return;
+    }
+
+    if (selectedLevel && !isProfanityLevelValue(selectedLevel)) {
+      await safeInteractionEditReply(interaction, {
+        content: "강도 값이 올바르지 않아요.",
+      });
+      return;
+    }
+
+    const levelToApply = selectedLevel ?? profanityConfig.moderationLevel;
+    const configPatch = {};
+    let addedWordCount = 0;
+    let addedExceptionCount = 0;
+
+    if (selectedLevel && selectedLevel !== profanityConfig.moderationLevel) {
+      configPatch.moderationLevel = selectedLevel;
+    }
+
+    if (wordsToAdd.length > 0) {
+      const targetFieldName = getProfanityTermsFieldNameByLevel(levelToApply);
+      const currentTerms = getProfanityTermsByLevel(profanityConfig, levelToApply);
+      const mergedTerms = mergeProfanityTermLists(currentTerms, wordsToAdd);
+
+      addedWordCount = mergedTerms.length - currentTerms.length;
+
+      if (addedWordCount > 0) {
+        configPatch[targetFieldName] = mergedTerms;
+      }
+    }
+
+    if (exceptionsToAdd.length > 0) {
+      const currentExceptions = Array.isArray(profanityConfig.customAllowedTerms)
+        ? profanityConfig.customAllowedTerms
+        : [];
+      const mergedExceptions = mergeProfanityTermLists(
+        currentExceptions,
+        exceptionsToAdd,
       );
 
-      if (action === PROFANITY_LIST_SUBCOMMAND_NAME) {
-        if (!selectedLevel) {
-          await safeInteractionEditReply(interaction, {
-            content: buildAllProfanityLevelCountsContent(mergedTermsByLevel),
-            files: [buildAllProfanityTermsAttachment(mergedTermsByLevel)],
-          });
-          return;
-        }
+      addedExceptionCount = mergedExceptions.length - currentExceptions.length;
 
-        if (!isProfanityLevelValue(selectedLevel)) {
-          await safeInteractionEditReply(interaction, {
-            content: "조회할 리스트 등급이 올바르지 않아요.",
-          });
-          return;
-        }
-
-        const targetTerms = mergedTermsByLevel[selectedLevel] ?? [];
-
-        await safeInteractionEditReply(interaction, {
-          content: buildProfanityListContent(
-            `${getProfanityLevelLabel(selectedLevel)} 금칙어 리스트 (CSV+커스텀)`,
-            targetTerms,
-          ),
-          files: [buildProfanityTermsAttachment(selectedLevel, targetTerms)],
-        });
-        return;
+      if (addedExceptionCount > 0) {
+        configPatch.customAllowedTerms = mergedExceptions;
       }
-
-      if (
-        action !== PROFANITY_ADD_SUBCOMMAND_NAME &&
-        action !== PROFANITY_REMOVE_SUBCOMMAND_NAME
-      ) {
-        await safeInteractionEditReply(interaction, {
-          content: "단어 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
-        });
-        return;
-      }
-
-      if (!isProfanityLevelValue(selectedLevel)) {
-        await safeInteractionEditReply(interaction, {
-          content: "수정할 리스트 등급이 올바르지 않아요.",
-        });
-        return;
-      }
-
-      const targetFieldName = getProfanityTermsFieldNameByLevel(selectedLevel);
-      const currentTerms = getProfanityTermsByLevel(profanityConfig, selectedLevel);
-      const levelLabel = getProfanityLevelLabel(selectedLevel);
-
-      if (!rawValueInput) {
-        await safeInteractionEditReply(interaction, {
-          content: "추가/삭제할 단어를 입력해 주세요.",
-        });
-        return;
-      }
-
-      const normalizedInput = normalizeProfanityTermInput(rawValueInput);
-
-      if (!normalizedInput) {
-        await safeInteractionEditReply(interaction, {
-          content: "한글/영문 글자가 포함된 단어만 등록할 수 있어요.",
-        });
-        return;
-      }
-
-      if (action === PROFANITY_ADD_SUBCOMMAND_NAME) {
-        if (currentTerms.includes(normalizedInput)) {
-          await safeInteractionEditReply(interaction, {
-            content:
-              `${levelLabel} 리스트에 이미 등록된 금칙어예요: ` +
-              `${normalizedInput}`,
-          });
-          return;
-        }
-
-        await updateProfanityConfig(guild.id, {
-          [targetFieldName]: [...currentTerms, normalizedInput],
-        });
-
-        await safeInteractionEditReply(interaction, {
-          content:
-            `${levelLabel} 리스트에 금칙어를 추가했어요: ` +
-            `${normalizedInput}`,
-        });
-        return;
-      }
-
-      if (action === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
-        if (!currentTerms.includes(normalizedInput)) {
-          await safeInteractionEditReply(interaction, {
-            content:
-              `${levelLabel} 리스트에 등록된 금칙어가 아니에요: ` +
-              `${normalizedInput}`,
-          });
-          return;
-        }
-
-        await updateProfanityConfig(guild.id, {
-          [targetFieldName]: currentTerms.filter(
-            (term) => term !== normalizedInput,
-          ),
-        });
-
-        await safeInteractionEditReply(interaction, {
-          content:
-            `${levelLabel} 리스트에서 금칙어를 삭제했어요: ` +
-            `${normalizedInput}`,
-        });
-        return;
-      }
-
-      await safeInteractionEditReply(interaction, {
-        content: "단어 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
-      });
-      return;
     }
 
-    if (category === PROFANITY_EXCEPTION_GROUP_NAME) {
-      const currentTerms = profanityConfig.customAllowedTerms;
-
-      if (action === PROFANITY_LIST_SUBCOMMAND_NAME) {
-        await safeInteractionEditReply(interaction, {
-          content: buildProfanityListContent("감지 예외 단어", currentTerms),
-        });
-        return;
-      }
-
-      if (
-        action !== PROFANITY_ADD_SUBCOMMAND_NAME &&
-        action !== PROFANITY_REMOVE_SUBCOMMAND_NAME
-      ) {
-        await safeInteractionEditReply(interaction, {
-          content: "예외 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
-        });
-        return;
-      }
-
-      if (!rawValueInput) {
-        await safeInteractionEditReply(interaction, {
-          content: "추가/삭제할 단어를 입력해 주세요.",
-        });
-        return;
-      }
-
-      const normalizedInput = normalizeProfanityTermInput(rawValueInput);
-
-      if (!normalizedInput) {
-        await safeInteractionEditReply(interaction, {
-          content: "한글/영문 글자가 포함된 단어만 등록할 수 있어요.",
-        });
-        return;
-      }
-
-      if (action === PROFANITY_ADD_SUBCOMMAND_NAME) {
-        if (currentTerms.includes(normalizedInput)) {
-          await safeInteractionEditReply(interaction, {
-            content: `이미 등록된 예외 단어예요: ${normalizedInput}`,
-          });
-          return;
-        }
-
-        await updateProfanityConfig(guild.id, {
-          customAllowedTerms: [...currentTerms, normalizedInput],
-        });
-
-        await safeInteractionEditReply(interaction, {
-          content: `감지 예외 단어를 추가했어요: ${normalizedInput}`,
-        });
-        return;
-      }
-
-      if (action === PROFANITY_REMOVE_SUBCOMMAND_NAME) {
-        if (!currentTerms.includes(normalizedInput)) {
-          await safeInteractionEditReply(interaction, {
-            content: `등록된 예외 단어가 아니에요: ${normalizedInput}`,
-          });
-          return;
-        }
-
-        await updateProfanityConfig(guild.id, {
-          customAllowedTerms: currentTerms.filter(
-            (term) => term !== normalizedInput,
-          ),
-        });
-
-        await safeInteractionEditReply(interaction, {
-          content: `감지 예외 단어를 삭제했어요: ${normalizedInput}`,
-        });
-        return;
-      }
-
-      await safeInteractionEditReply(interaction, {
-        content: "예외 카테고리에서는 추가/삭제/목록만 사용할 수 있어요.",
-      });
-      return;
+    if (!alreadyEnabled) {
+      await setProfanityChannelEnabled(guild.id, channelId, true);
     }
+
+    if (Object.keys(configPatch).length > 0) {
+      await updateProfanityConfig(guild.id, configPatch);
+    }
+
+    const lines = [];
+
+    if (!alreadyEnabled) {
+      lines.push(`${channelMention}에서 욕설감지를 켰어요.`);
+    } else {
+      lines.push(`${channelMention}은(는) 이미 켜져 있어요. 설정만 반영했어요.`);
+    }
+
+    lines.push(`강도: ${getProfanityLevelLabel(levelToApply)}`);
+
+    if (rawWordsInput) {
+      lines.push(`단어 추가: ${addedWordCount}개`);
+    }
+
+    if (rawExceptionInput) {
+      lines.push(`예외 추가: ${addedExceptionCount}개`);
+    }
+
+    lines.push("감지된 메시지는 바로 삭제됩니다.");
 
     await safeInteractionEditReply(interaction, {
-      content: "알 수 없는 욕설감지 카테고리예요.",
+      content: lines.join("\n"),
     });
   } catch (error) {
     console.error("욕설감지 명령어 처리 실패", error);
@@ -3797,6 +3605,24 @@ function normalizeProfanityTermInput(rawInput) {
     .normalize("NFKC")
     .replace(/[^\p{L}]+/gu, "")
     .trim();
+}
+
+function parseProfanityTermListInput(rawInput) {
+  if (typeof rawInput !== "string" || !rawInput.trim()) {
+    return [];
+  }
+
+  const uniqueTerms = new Set();
+
+  for (const token of rawInput.split(/[\n,]/)) {
+    const normalized = normalizeProfanityTermInput(token);
+
+    if (normalized) {
+      uniqueTerms.add(normalized);
+    }
+  }
+
+  return [...uniqueTerms];
 }
 
 function isProfanityLevelValue(level) {
