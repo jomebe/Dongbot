@@ -5054,6 +5054,10 @@ async function handleTtsMessage(message) {
     return;
   }
 
+  if (config.blockedFromTtsRead) {
+    return;
+  }
+
   const isDedicatedRoomMode =
     ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_CHANNEL;
 

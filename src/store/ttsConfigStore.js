@@ -30,6 +30,10 @@ function normalizeConfig(guildId, userId, data = {}) {
   const hasValidMode =
     data.ttsInputMode === TTS_INPUT_MODE_CHANNEL ||
     data.ttsInputMode === TTS_INPUT_MODE_GUILD;
+  const hasEnabledField = Object.prototype.hasOwnProperty.call(data, "enabled");
+  const isBlockedFromTtsRead =
+    data.blockedFromTtsRead === true ||
+    (hasEnabledField && data.enabled === false);
 
   const inferredModeFromLegacyValue = data.ttsTextChannelId
     ? TTS_INPUT_MODE_CHANNEL
@@ -39,6 +43,7 @@ function normalizeConfig(guildId, userId, data = {}) {
     guildId,
     userId,
     enabled: Boolean(data.enabled),
+    blockedFromTtsRead: isBlockedFromTtsRead,
     voiceShortName: data.voiceShortName ?? DEFAULT_TTS_VOICE,
     ttsTextChannelId: data.ttsTextChannelId ?? null,
     ttsInputMode: hasValidMode ? data.ttsInputMode : inferredModeFromLegacyValue,
@@ -92,6 +97,7 @@ export async function setUserTtsEnabled(
     const next = {
       ...current,
       enabled,
+      blockedFromTtsRead: !enabled,
       ttsTextChannelId: nextChannelId,
       ttsInputMode: nextInputMode,
     };
@@ -109,6 +115,7 @@ export async function setUserTtsEnabled(
       guildId,
       userId,
       enabled,
+      blockedFromTtsRead: !enabled,
       voiceShortName: current.voiceShortName,
       ttsTextChannelId:
         ttsTextChannelId !== undefined
@@ -127,6 +134,7 @@ export async function setUserTtsEnabled(
   return {
     ...current,
     enabled,
+    blockedFromTtsRead: !enabled,
     ttsTextChannelId:
       ttsTextChannelId !== undefined
         ? ttsTextChannelId
