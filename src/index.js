@@ -888,6 +888,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   await runGuildTask(guildId, async () => {
     await handleJoinRoomGenerator(oldState, newState);
     await handleEmptyManagedChannel(oldState, newState);
+    await handleTtsAutoLeaveWhenChannelEmpty(oldState, newState);
     await handleVoiceJoinLeaveLog(oldState, newState);
   });
 });
@@ -5646,6 +5647,59 @@ async function handleEmptyManagedChannel(oldState, newState) {
   } finally {
     await removeManagedChannel(oldState.guild.id, oldChannel.id);
   }
+}
+
+async function handleTtsAutoLeaveWhenChannelEmpty(oldState, newState) {
+  if (oldState.channelId === newState.channelId) {
+    return;
+  }
+
+  const guildId = oldState.guild.id;
+  const connection = getVoiceConnection(guildId);
+
+  if (!connection) {
+    return;
+  }
+
+  const connectedChannelId = connection.joinConfig.channelId;
+
+  if (!connectedChannelId) {
+    return;
+  }
+
+  const didAffectConnectedChannel =
+    oldState.channelId === connectedChannelId ||
+    newState.channelId === connectedChannelId;
+
+  if (!didAffectConnectedChannel) {
+    return;
+  }
+
+  const connectedChannel =
+    oldState.guild.channels.cache.get(connectedChannelId) ??
+    (await oldState.guild.channels.fetch(connectedChannelId).catch(() => null));
+
+  if (!connectedChannel || connectedChannel.type !== ChannelType.GuildVoice) {
+    connection.destroy();
+    return;
+  }
+
+  const humanCount = connectedChannel.members.filter(
+    (member) => !member.user.bot,
+  ).size;
+
+  if (humanCount > 0) {
+    return;
+  }
+
+  const runtime = ttsRuntimeByGuild.get(guildId);
+
+  if (runtime) {
+    runtime.queue.length = 0;
+    runtime.player.stop(true);
+  }
+
+  connection.destroy();
 }
 
 function getNextRoomNumber(guild) {
