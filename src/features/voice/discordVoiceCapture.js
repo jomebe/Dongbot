@@ -115,6 +115,8 @@ export function captureUserUtterances({
     });
     decoder.once("end", () => void finalize());
     decoder.once("error", (error) => {
+      chunks.length = 0;
+      totalBytes = 0;
       onError(error);
       void finalize();
     });

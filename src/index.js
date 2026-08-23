@@ -192,6 +192,7 @@ const VOICE_ASSISTANT_ENABLE_SUBCOMMAND_NAME = "켜기";
 const VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME = "끄기";
 const STT_TEST_COMMAND_NAME = "stt테스트";
 const STT_TEST_TIMEOUT_MS = 45_000;
+const VOICE_RECEIVE_SETTLE_MS = 2_000;
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
@@ -4575,12 +4576,12 @@ async function handleSttTestCommand(interaction) {
       return;
     }
 
-    await safeInteractionEditReply(interaction, {
-      content: "🎙️ 준비됐어요. 45초 안에 테스트할 문장을 한 번 말해 주세요.",
-    });
-
-    const connection = await ensureTtsConnectionForChannel(voiceChannel);
     sttTestGuilds.add(guild.id);
+    const connection = await ensureTtsConnectionForChannel(voiceChannel);
+    await new Promise((resolve) => setTimeout(resolve, VOICE_RECEIVE_SETTLE_MS));
+    await safeInteractionEditReply(interaction, {
+      content: "🎙️ 준비됐어요. 지금부터 45초 안에 테스트할 문장을 한 번 말해 주세요.",
+    });
     const transcript = await new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         const error = new Error("STT test timed out");
@@ -4597,7 +4598,19 @@ async function handleSttTestCommand(interaction) {
         userId: interaction.user.id,
         transcribe: (pcmBuffer) => nvidiaAsrClient.transcribePcm(pcmBuffer),
         onTranscript: (value) => finish(resolve, value),
-        onError: (error) => finish(reject, error),
+        onError: (error) => {
+          if (!isRecoverableVoiceDecodeError(error)) {
+            finish(reject, error);
+            return;
+          }
+
+          console.warn("STT 음성 패킷 재시도", error);
+          void safeInteractionEditReply(interaction, {
+            content: "음성 연결의 첫 패킷이 불안정했어요. 잠깐 쉬었다가 한 번 더 말해 주세요.",
+          }).catch((replyError) =>
+            console.error("STT 재시도 안내 실패", replyError),
+          );
+        },
       });
     });
     const quotedTranscript = transcript.replaceAll("\n", "\n> ");
@@ -4795,6 +4808,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
 
   stopVoiceAssistantRuntime(guild.id);
   const connection = await ensureTtsConnectionForChannel(voiceChannel);
+  await new Promise((resolve) => setTimeout(resolve, VOICE_RECEIVE_SETTLE_MS));
   const wakeSession = new WakeWordSession({
     wakeWord: voiceAssistantWakeWord,
   });
@@ -6073,6 +6087,15 @@ function isVoiceConnectionAbortError(error) {
     message.includes("Cannot perform IP discovery - socket closed") ||
     message.includes("TTS playback start timed out") ||
     message.includes("TTS playback completion timed out")
+  );
+}
+
+function isRecoverableVoiceDecodeError(error) {
+  const message = typeof error?.message === "string" ? error.message : "";
+
+  return (
+    message.includes("Invalid packet") ||
+    message.includes("compressed data passed is corrupted")
   );
 }
 
