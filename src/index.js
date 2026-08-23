@@ -173,6 +173,10 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
+client.on("error", (error) => {
+  console.error("Discord 클라이언트 오류:", error);
+});
+
 const guildTaskQueue = new Map();
 const queueTimeoutJobs = new Map();
 const profanityDeleteLogSkipMap = new Map();
@@ -514,14 +518,6 @@ const timetableCommand = new SlashCommandBuilder()
     subcommand
       .setName(SCHOOL_CHECK_SUBCOMMAND_NAME)
       .setDescription("시간표 확인")
-      .addStringOption((option) =>
-        option
-          .setName(SCHOOL_NAME_OPTION)
-          .setDescription("학교 이름 (미입력 시 /학교 설정값 사용)")
-          .setRequired(false)
-          .setMinLength(2)
-          .setMaxLength(50),
-      )
       .addIntegerOption((option) =>
         option
           .setName(TIMETABLE_GRADE_OPTION)
@@ -537,6 +533,14 @@ const timetableCommand = new SlashCommandBuilder()
           .setRequired(true)
           .setMinValue(1)
           .setMaxValue(30),
+      )
+      .addStringOption((option) =>
+        option
+          .setName(SCHOOL_NAME_OPTION)
+          .setDescription("학교 이름 (미입력 시 /학교 설정값 사용)")
+          .setRequired(false)
+          .setMinLength(2)
+          .setMaxLength(50),
       )
       .addStringOption((option) =>
         option

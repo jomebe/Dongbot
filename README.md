@@ -42,7 +42,7 @@ npm install
 - `NVIDIA_ASR_FUNCTION_ID` (기본값: NVIDIA Canary 1B ASR)
 - `VOICE_ASSISTANT_WAKE_WORD` (기본값: `동봇`)
 
-Firebase는 필수입니다. 값이 누락되면 봇이 시작되지 않습니다.
+Firebase 값은 필수입니다. Firestore 권한을 열기 전에는 `FIREBASE_ENABLED=false`로 설정하면 메모리 저장소를 사용합니다.
 
 ## 3) 실행
 
