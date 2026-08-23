@@ -190,6 +190,8 @@ const LEAVE_VOICE_COMMAND_NAME = "나가";
 const VOICE_ASSISTANT_COMMAND_NAME = "음성비서";
 const VOICE_ASSISTANT_ENABLE_SUBCOMMAND_NAME = "켜기";
 const VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME = "끄기";
+const STT_TEST_COMMAND_NAME = "stt테스트";
+const STT_TEST_TIMEOUT_MS = 45_000;
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
@@ -335,6 +337,7 @@ const ttsLanguageAliasToVoice = new Map([
 const ttsRuntimeByGuild = new Map();
 const voiceAssistantRuntimeByGuild = new Map();
 const voiceAssistantTargetUserByGuild = new Map();
+const sttTestGuilds = new Set();
 const handledTtsVoiceConnections = new WeakSet();
 const joinLeaveEventHistory = new Map();
 const nvidiaAsrClient = nvidiaApiKey
@@ -396,6 +399,11 @@ const voiceAssistantCommand = new SlashCommandBuilder()
       .setName(VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME)
       .setDescription("이 서버의 음성비서를 끕니다"),
   );
+
+const sttTestCommand = new SlashCommandBuilder()
+  .setName(STT_TEST_COMMAND_NAME)
+  .setDescription("내 다음 발화 1개를 STT로 변환해 보여줍니다")
+  .setDMPermission(false);
 
 const ttsCommand = new SlashCommandBuilder()
   .setName(TTS_COMMAND_NAME)
@@ -727,6 +735,11 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === VOICE_ASSISTANT_COMMAND_NAME) {
         await handleVoiceAssistantCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === STT_TEST_COMMAND_NAME) {
+        await handleSttTestCommand(interaction);
         return;
       }
 
@@ -1110,6 +1123,7 @@ async function registerGuildCommands(guild) {
     callRoomCommand.toJSON(),
     leaveVoiceCommand.toJSON(),
     voiceAssistantCommand.toJSON(),
+    sttTestCommand.toJSON(),
     ttsCommand.toJSON(),
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
@@ -4496,6 +4510,124 @@ async function restoreVoiceAssistants() {
       }
     } catch (error) {
       console.error(`음성비서 복원 실패 (guild=${guild.id})`, error);
+    }
+  }
+}
+
+async function handleSttTestCommand(interaction) {
+  let stopListening = null;
+
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!nvidiaAsrClient) {
+      await safeInteractionReply(interaction, {
+        content: "NVIDIA_API_KEY가 설정되지 않아 STT를 테스트할 수 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const didDefer = await safeDeferEphemeral(interaction);
+
+    if (!didDefer) {
+      return;
+    }
+
+    if (sttTestGuilds.has(guild.id)) {
+      await safeInteractionEditReply(interaction, {
+        content: "이 서버에서 이미 STT 테스트가 진행 중이에요.",
+      });
+      return;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id);
+    const voiceChannel = member.voice.channel;
+
+    if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+      await safeInteractionEditReply(interaction, {
+        content: "먼저 음성 채널에 들어간 뒤 다시 실행해 주세요.",
+      });
+      return;
+    }
+
+    if (voiceAssistantTargetUserByGuild.has(guild.id)) {
+      await safeInteractionEditReply(interaction, {
+        content: "음성비서를 끈 뒤 STT 테스트를 실행해 주세요.",
+      });
+      return;
+    }
+
+    const missingVoicePermissions = getMissingTtsVoicePermissions(voiceChannel);
+
+    if (missingVoicePermissions.length > 0) {
+      await safeInteractionEditReply(interaction, {
+        content: `봇 음성 권한이 부족해요: ${missingVoicePermissions.join(", ")}`,
+      });
+      return;
+    }
+
+    await safeInteractionEditReply(interaction, {
+      content: "🎙️ 준비됐어요. 45초 안에 테스트할 문장을 한 번 말해 주세요.",
+    });
+
+    const connection = await ensureTtsConnectionForChannel(voiceChannel);
+    sttTestGuilds.add(guild.id);
+    const transcript = await new Promise((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        const error = new Error("STT test timed out");
+        error.code = "STT_TEST_TIMEOUT";
+        reject(error);
+      }, STT_TEST_TIMEOUT_MS);
+      const finish = (callback, value) => {
+        clearTimeout(timeoutHandle);
+        callback(value);
+      };
+
+      stopListening = captureUserUtterances({
+        connection,
+        userId: interaction.user.id,
+        transcribe: (pcmBuffer) => nvidiaAsrClient.transcribePcm(pcmBuffer),
+        onTranscript: (value) => finish(resolve, value),
+        onError: (error) => finish(reject, error),
+      });
+    });
+    const quotedTranscript = transcript.replaceAll("\n", "\n> ");
+
+    await safeInteractionEditReply(interaction, {
+      content: `✅ STT 인식 결과\n> ${quotedTranscript}`,
+    });
+  } catch (error) {
+    console.error("STT 테스트 실패", error);
+    const content =
+      error?.code === "STT_TEST_TIMEOUT"
+        ? "45초 동안 인식할 음성이 없었어요. 다시 실행해 주세요."
+        : "STT 테스트 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.";
+
+    if (interaction.deferred) {
+      await safeInteractionEditReply(interaction, { content });
+    } else if (!interaction.replied) {
+      await safeInteractionReply(interaction, {
+        content,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  } finally {
+    stopListening?.();
+
+    if (interaction.guild) {
+      sttTestGuilds.delete(interaction.guild.id);
+      await maybeDisconnectTtsIfNoEnabledUser(interaction.guild.id).catch(
+        (error) => console.error("STT 테스트 후 음성 연결 정리 실패", error),
+      );
     }
   }
 }

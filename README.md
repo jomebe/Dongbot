@@ -42,6 +42,8 @@ npm install
 - `NVIDIA_ASR_FUNCTION_ID` (기본값: NVIDIA Canary 1B ASR)
 - `VOICE_ASSISTANT_WAKE_WORD` (기본값: `동봇`)
 
+음성 채널에서 `/stt테스트`를 실행하고 한 문장을 말하면 NVIDIA STT가 인식한 원문을 개인 응답으로 확인할 수 있습니다.
+
 Firebase 값은 필수입니다. Firestore 권한을 열기 전에는 `FIREBASE_ENABLED=false`로 설정하면 메모리 저장소를 사용합니다.
 
 ## 3) 실행
