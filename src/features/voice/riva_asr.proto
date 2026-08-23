@@ -1,0 +1,47 @@
+// Minimal NVIDIA Riva ASR wire contract used by Dongbot.
+// Compatible with NVIDIA's MIT-licensed riva_asr.proto.
+syntax = "proto3";
+
+package nvidia.riva.asr;
+
+service RivaSpeechRecognition {
+  rpc Recognize(RecognizeRequest) returns (RecognizeResponse) {}
+}
+
+enum AudioEncoding {
+  ENCODING_UNSPECIFIED = 0;
+  LINEAR_PCM = 1;
+}
+
+message SpeechContext {
+  repeated string phrases = 1;
+  float boost = 4;
+}
+
+message RecognitionConfig {
+  AudioEncoding encoding = 1;
+  int32 sample_rate_hertz = 2;
+  string language_code = 3;
+  int32 max_alternatives = 4;
+  repeated SpeechContext speech_contexts = 6;
+  int32 audio_channel_count = 7;
+  bool enable_automatic_punctuation = 11;
+}
+
+message RecognizeRequest {
+  RecognitionConfig config = 1;
+  bytes audio = 2;
+}
+
+message SpeechRecognitionAlternative {
+  string transcript = 1;
+  float confidence = 2;
+}
+
+message SpeechRecognitionResult {
+  repeated SpeechRecognitionAlternative alternatives = 1;
+}
+
+message RecognizeResponse {
+  repeated SpeechRecognitionResult results = 1;
+}

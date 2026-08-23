@@ -21,6 +21,15 @@ export const roomPrefix = process.env.BOT_ROOM_PREFIX ?? "음성 수다방";
 export const neisApiKey =
   process.env.NEIS_API_KEY ?? "d1c3d45db6004d0199fc445ba2510657";
 
+export const nvidiaApiKey = process.env.NVIDIA_API_KEY ?? null;
+export const nvidiaAsrServer =
+  process.env.NVIDIA_ASR_SERVER ?? "grpc.nvcf.nvidia.com:443";
+export const nvidiaAsrFunctionId =
+  process.env.NVIDIA_ASR_FUNCTION_ID ??
+  "b0e8b4a5-217c-40b7-9b96-17d84e666317";
+export const voiceAssistantWakeWord =
+  process.env.VOICE_ASSISTANT_WAKE_WORD ?? "동봇";
+
 const firebaseApiKey = getRequiredEnv("FIREBASE_API_KEY");
 const firebaseAuthDomain = getRequiredEnv("FIREBASE_AUTH_DOMAIN");
 const firebaseProjectId = getRequiredEnv("FIREBASE_PROJECT_ID");

@@ -34,8 +34,12 @@ import {
 import {
   discordToken,
   neisApiKey,
+  nvidiaApiKey,
+  nvidiaAsrFunctionId,
+  nvidiaAsrServer,
   roomGeneratorChannelName,
   roomPrefix,
+  voiceAssistantWakeWord,
 } from "./config.js";
 import {
   addManagedChannel,
@@ -92,6 +96,10 @@ import {
   removeReactionRolePanel,
 } from "./store/reactionRoleStore.js";
 import {
+  getVoiceAssistantConfig,
+  updateVoiceAssistantConfig,
+} from "./store/voiceAssistantConfigStore.js";
+import {
   POLL_BUTTON_PREFIX,
   POLL_COMMAND_NAME,
   POLL_CREATE_MODAL_PREFIX,
@@ -140,6 +148,12 @@ import {
   parseNeisDateInput,
   resolveSchoolInfo,
 } from "./features/school/neisUtils.js";
+import { captureUserUtterances } from "./features/voice/discordVoiceCapture.js";
+import { createNvidiaAsrClient } from "./features/voice/nvidiaAsrClient.js";
+import {
+  WakeWordSession,
+  parseVoiceCommand,
+} from "./features/voice/voiceCommandParser.js";
 import {
   safeDeferEphemeral,
   safeInteractionDeleteReply,
@@ -169,6 +183,9 @@ const ROOM_CATEGORY_SELECT_PREFIX = "dongbot:room-category:";
 const ROOT_CATEGORY_VALUE = "dongbot:root-category";
 const CALL_ROOM_COMMAND_NAME = "통화방";
 const LEAVE_VOICE_COMMAND_NAME = "나가";
+const VOICE_ASSISTANT_COMMAND_NAME = "음성비서";
+const VOICE_ASSISTANT_ENABLE_SUBCOMMAND_NAME = "켜기";
+const VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME = "끄기";
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
@@ -312,8 +329,18 @@ const ttsLanguageAliasToVoice = new Map([
 ]);
 
 const ttsRuntimeByGuild = new Map();
+const voiceAssistantRuntimeByGuild = new Map();
+const voiceAssistantTargetUserByGuild = new Map();
 const handledTtsVoiceConnections = new WeakSet();
 const joinLeaveEventHistory = new Map();
+const nvidiaAsrClient = nvidiaApiKey
+  ? createNvidiaAsrClient({
+      apiKey: nvidiaApiKey,
+      functionId: nvidiaAsrFunctionId,
+      server: nvidiaAsrServer,
+      wakeWord: voiceAssistantWakeWord,
+    })
+  : null;
 
 const callRoomCommand = new SlashCommandBuilder()
   .setName(CALL_ROOM_COMMAND_NAME)
@@ -350,6 +377,21 @@ const leaveVoiceCommand = new SlashCommandBuilder()
   .setName(LEAVE_VOICE_COMMAND_NAME)
   .setDescription("봇을 현재 음성 채널에서 나가게 합니다")
   .setDMPermission(false);
+
+const voiceAssistantCommand = new SlashCommandBuilder()
+  .setName(VOICE_ASSISTANT_COMMAND_NAME)
+  .setDescription("내 음성을 듣고 동봇 호출어로 명령을 실행합니다")
+  .setDMPermission(false)
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(VOICE_ASSISTANT_ENABLE_SUBCOMMAND_NAME)
+      .setDescription("내가 있는 음성 채널에서 음성비서를 켭니다"),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName(VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME)
+      .setDescription("이 서버의 음성비서를 끕니다"),
+  );
 
 const ttsCommand = new SlashCommandBuilder()
   .setName(TTS_COMMAND_NAME)
@@ -653,6 +695,7 @@ const profanityCommand = new SlashCommandBuilder()
 client.once("clientReady", async () => {
   console.log(`동봇 로그인 완료: ${client.user.tag}`);
   await registerAllGuildCommands();
+  await restoreVoiceAssistants();
 });
 
 client.on("guildCreate", async (guild) => {
@@ -675,6 +718,11 @@ client.on("interactionCreate", async (interaction) => {
 
       if (interaction.commandName === LEAVE_VOICE_COMMAND_NAME) {
         await handleLeaveVoiceCommand(interaction);
+        return;
+      }
+
+      if (interaction.commandName === VOICE_ASSISTANT_COMMAND_NAME) {
+        await handleVoiceAssistantCommand(interaction);
         return;
       }
 
@@ -890,6 +938,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     await handleEmptyManagedChannel(oldState, newState);
     await handleTtsAutoLeaveWhenChannelEmpty(oldState, newState);
     await handleVoiceJoinLeaveLog(oldState, newState);
+    await handleVoiceAssistantVoiceState(oldState, newState);
   });
 });
 
@@ -1056,6 +1105,7 @@ async function registerGuildCommands(guild) {
   await guild.commands.set([
     callRoomCommand.toJSON(),
     leaveVoiceCommand.toJSON(),
+    voiceAssistantCommand.toJSON(),
     ttsCommand.toJSON(),
     ttsTestCommand.toJSON(),
     setupCommand.toJSON(),
@@ -4417,6 +4467,423 @@ function isReactionRoleMatch(panel, emoji) {
   return !emoji.id && emoji.name === panel.emojiName;
 }
 
+async function restoreVoiceAssistants() {
+  if (!nvidiaAsrClient) {
+    console.warn(
+      "NVIDIA_API_KEY가 없어 음성비서 기능을 비활성화합니다. 다른 기능은 정상 동작합니다.",
+    );
+    return;
+  }
+
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const config = await getVoiceAssistantConfig(guild.id);
+
+      if (!config.enabled || !config.userId) {
+        continue;
+      }
+
+      voiceAssistantTargetUserByGuild.set(guild.id, config.userId);
+      const member = await guild.members.fetch(config.userId).catch(() => null);
+      const voiceChannel = member?.voice?.channel;
+
+      if (voiceChannel?.type === ChannelType.GuildVoice) {
+        await startVoiceAssistantRuntime(guild, config.userId, voiceChannel);
+      }
+    } catch (error) {
+      console.error(`음성비서 복원 실패 (guild=${guild.id})`, error);
+    }
+  }
+}
+
+async function handleVoiceAssistantCommand(interaction) {
+  try {
+    const guild = interaction.guild;
+
+    if (!guild) {
+      await safeInteractionReply(interaction, {
+        content: "이 명령어는 서버에서만 사용할 수 있어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME) {
+      const config = await getVoiceAssistantConfig(guild.id);
+      const canDisable =
+        config.userId === interaction.user.id ||
+        (await isAdminUser(guild, interaction.user.id));
+
+      if (!canDisable) {
+        await safeInteractionReply(interaction, {
+          content: "음성비서를 켠 사용자나 서버 관리자만 끌 수 있어요.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await updateVoiceAssistantConfig(guild.id, {
+        enabled: false,
+        userId: null,
+      });
+      voiceAssistantTargetUserByGuild.delete(guild.id);
+      stopVoiceAssistantRuntime(guild.id);
+      await maybeDisconnectTtsIfNoEnabledUser(guild.id);
+
+      await safeInteractionReply(interaction, {
+        content: "음성비서를 껐어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!nvidiaAsrClient) {
+      await safeInteractionReply(interaction, {
+        content: "NVIDIA_API_KEY가 설정되지 않아 음성비서를 켤 수 없어요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const existingConfig = await getVoiceAssistantConfig(guild.id);
+
+    if (
+      existingConfig.enabled &&
+      existingConfig.userId !== interaction.user.id &&
+      !(await isAdminUser(guild, interaction.user.id))
+    ) {
+      await safeInteractionReply(interaction, {
+        content:
+          "이미 다른 사용자의 음성비서가 켜져 있어요. 그 사용자나 서버 관리자가 먼저 꺼야 해요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id);
+    const voiceChannel = member.voice.channel;
+
+    if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+      await safeInteractionReply(interaction, {
+        content: "먼저 음성 채널에 들어간 뒤 다시 실행해 주세요.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const missingVoicePermissions = getMissingTtsVoicePermissions(voiceChannel);
+
+    if (missingVoicePermissions.length > 0) {
+      await safeInteractionReply(interaction, {
+        content: `봇 음성 권한이 부족해요: ${missingVoicePermissions.join(", ")}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await startVoiceAssistantRuntime(guild, interaction.user.id, voiceChannel);
+    await updateVoiceAssistantConfig(guild.id, {
+      enabled: true,
+      userId: interaction.user.id,
+    });
+    voiceAssistantTargetUserByGuild.set(guild.id, interaction.user.id);
+
+    await safeInteractionReply(interaction, {
+      content:
+        `음성비서를 켰어요. “${voiceAssistantWakeWord}”이라고 부르면 “네”라고 답하고 ` +
+        "10초 동안 다음 명령을 기다려요. 같은 문장에 명령을 이어 말해도 돼요.",
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (error) {
+    console.error("음성비서 명령어 처리 실패", error);
+
+    if (
+      interaction.guild &&
+      interaction.options.getSubcommand(false) ===
+        VOICE_ASSISTANT_ENABLE_SUBCOMMAND_NAME
+    ) {
+      stopVoiceAssistantRuntime(interaction.guild.id);
+    }
+
+    await safeInteractionReply(interaction, {
+      content: "음성비서를 켜거나 끄는 중 오류가 발생했어요.",
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
+async function handleVoiceAssistantVoiceState(oldState, newState) {
+  if (oldState.channelId === newState.channelId) {
+    return;
+  }
+
+  const guildId = newState.guild.id;
+  const targetUserId = voiceAssistantTargetUserByGuild.get(guildId);
+
+  if (!targetUserId || newState.id !== targetUserId || !nvidiaAsrClient) {
+    return;
+  }
+
+  const member = await newState.guild.members.fetch(targetUserId).catch(() => null);
+  const voiceChannel = member?.voice?.channel;
+
+  if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+    stopVoiceAssistantRuntime(guildId);
+
+    if (!(await hasEnabledTtsUsersInGuild(guildId))) {
+      getVoiceConnection(guildId)?.destroy();
+    }
+
+    return;
+  }
+
+  await startVoiceAssistantRuntime(newState.guild, targetUserId, voiceChannel);
+}
+
+async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
+  if (!nvidiaAsrClient) {
+    throw new Error("NVIDIA ASR client is not configured");
+  }
+
+  const existingRuntime = voiceAssistantRuntimeByGuild.get(guild.id);
+
+  if (
+    existingRuntime?.userId === userId &&
+    existingRuntime.channelId === voiceChannel.id &&
+    existingRuntime.connection.state.status !== VoiceConnectionStatus.Destroyed
+  ) {
+    return;
+  }
+
+  stopVoiceAssistantRuntime(guild.id);
+  const connection = await ensureTtsConnectionForChannel(voiceChannel);
+  const wakeSession = new WakeWordSession({
+    wakeWord: voiceAssistantWakeWord,
+  });
+  const runtime = {
+    channelId: voiceChannel.id,
+    connection,
+    stopListening: null,
+    userId,
+  };
+
+  runtime.stopListening = captureUserUtterances({
+    connection,
+    userId,
+    transcribe: (pcmBuffer) => nvidiaAsrClient.transcribePcm(pcmBuffer),
+    onTranscript: async (transcript) => {
+      const currentRuntime = voiceAssistantRuntimeByGuild.get(guild.id);
+
+      if (currentRuntime !== runtime) {
+        return;
+      }
+
+      const wakeResult = wakeSession.consume(transcript);
+
+      if (!wakeResult) {
+        return;
+      }
+
+      if (wakeResult.awakened) {
+        enqueueTtsPlayback(
+          guild,
+          voiceChannel,
+          "ko-KR-SunHiNeural",
+          "네",
+        );
+      }
+
+      if (!wakeResult.commandText) {
+        return;
+      }
+
+      try {
+        const command = parseVoiceCommand(wakeResult.commandText);
+        const reply = await executeVoiceAssistantCommand({
+          guild,
+          userId,
+          command,
+        });
+
+        if (reply) {
+          enqueueTtsPlayback(
+            guild,
+            voiceChannel,
+            "ko-KR-SunHiNeural",
+            reply,
+          );
+        }
+      } catch (error) {
+        console.error(`음성 명령 실행 실패 (guild=${guild.id})`, error);
+        enqueueTtsPlayback(
+          guild,
+          voiceChannel,
+          "ko-KR-SunHiNeural",
+          "명령을 실행하는 중 오류가 발생했어요.",
+        );
+      }
+    },
+    onError: (error) => {
+      console.error(`음성 인식 실패 (guild=${guild.id})`, error);
+    },
+  });
+
+  voiceAssistantRuntimeByGuild.set(guild.id, runtime);
+}
+
+function stopVoiceAssistantRuntime(guildId) {
+  const runtime = voiceAssistantRuntimeByGuild.get(guildId);
+
+  if (!runtime) {
+    return;
+  }
+
+  runtime.stopListening?.();
+  voiceAssistantRuntimeByGuild.delete(guildId);
+}
+
+async function getManagedVoiceRoomForUser(guild, userId) {
+  const member = await guild.members.fetch(userId);
+  const voiceChannel = member.voice.channel;
+
+  if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+    throw new Error("먼저 음성 수다방에 들어가 주세요.");
+  }
+
+  const config = await getGuildConfig(guild.id);
+
+  if (
+    voiceChannel.id === config.generatorChannelId ||
+    !config.managedChannelIds.includes(voiceChannel.id)
+  ) {
+    throw new Error("동봇이 만든 음성 수다방에서만 바꿀 수 있어요.");
+  }
+
+  return voiceChannel;
+}
+
+async function executeVoiceAssistantCommand({ guild, userId, command }) {
+  if (command.type === "help" || command.type === "unknown") {
+    return "방 이름 변경, 방 인원 변경, 티티에스 켜기와 끄기, 급식, 시간표, 나가기를 말할 수 있어요.";
+  }
+
+  if (command.type === "leave") {
+    await updateVoiceAssistantConfig(guild.id, {
+      enabled: false,
+      userId: null,
+    });
+    voiceAssistantTargetUserByGuild.delete(guild.id);
+    stopVoiceAssistantRuntime(guild.id);
+    getVoiceConnection(guild.id)?.destroy();
+    return null;
+  }
+
+  if (command.type === "room-limit") {
+    const voiceChannel = await getManagedVoiceRoomForUser(guild, userId);
+    await voiceChannel.setUserLimit(
+      command.userLimit,
+      `동봇 음성 명령 요청: ${userId}`,
+    );
+    return command.userLimit === 0
+      ? "통화방 최대 인원을 무제한으로 바꿨어요."
+      : `통화방 최대 인원을 ${command.userLimit}명으로 바꿨어요.`;
+  }
+
+  if (command.type === "room-name") {
+    const voiceChannel = await getManagedVoiceRoomForUser(guild, userId);
+    const nextName = command.name.slice(0, 100);
+    await voiceChannel.setName(nextName, `동봇 음성 명령 요청: ${userId}`);
+    return `통화방 이름을 ${nextName}으로 바꿨어요.`;
+  }
+
+  if (command.type === "tts") {
+    if (!command.enabled) {
+      await setUserTtsEnabled(guild.id, userId, false, undefined);
+      return "티티에스를 껐어요.";
+    }
+
+    const ttsGuildConfig = await getTtsGuildConfig(guild.id);
+
+    if (!ttsGuildConfig.inputMode) {
+      return "티티에스 입력 방식이 아직 설정되지 않았어요. 초기설정에서 먼저 정해 주세요.";
+    }
+
+    if (ttsGuildConfig.inputMode === TTS_GUILD_INPUT_MODE_CHANNEL) {
+      const textChannel = await ensureTtsInputTextChannel(
+        guild,
+        ttsGuildConfig.textChannelId,
+      );
+      await setUserTtsEnabled(guild.id, userId, true, textChannel.id);
+      return "티티에스를 켰어요. 전용 채팅방의 메시지를 읽을게요.";
+    }
+
+    await setUserTtsEnabled(guild.id, userId, true, null);
+    return "티티에스를 켰어요. 서버의 메시지를 읽을게요.";
+  }
+
+  if (command.type === "meal") {
+    const lookupInput = await resolveSchoolLookupInput({
+      guildId: guild.id,
+      schoolNameInput: null,
+      educationOfficeNameInput: null,
+    });
+    const requestedDate = parseNeisDateInput(command.dateInput);
+    const school = await resolveSchoolInfo({
+      apiKey: neisApiKey,
+      schoolName: lookupInput.schoolName,
+      educationOfficeName: lookupInput.educationOfficeName,
+    });
+    const meal = await getMealInfoBySchool({
+      apiKey: neisApiKey,
+      school,
+      ymd: requestedDate.ymd,
+    });
+
+    if (!meal) {
+      return `${requestedDate.label} 급식 정보가 없어요.`;
+    }
+
+    const mealText = formatMealText(meal.DDISH_NM)
+      .replace(/\s*\([^)]*\)/gu, "")
+      .replace(/\s*\n\s*/gu, ", ");
+    return `${requestedDate.label} 급식은 ${mealText}입니다.`;
+  }
+
+  if (command.type === "timetable") {
+    const lookupInput = await resolveSchoolLookupInput({
+      guildId: guild.id,
+      schoolNameInput: null,
+      educationOfficeNameInput: null,
+    });
+    const requestedDate = parseNeisDateInput(command.dateInput);
+    const school = await resolveSchoolInfo({
+      apiKey: neisApiKey,
+      schoolName: lookupInput.schoolName,
+      educationOfficeName: lookupInput.educationOfficeName,
+    });
+    const rows = await getTimetableBySchool({
+      apiKey: neisApiKey,
+      school,
+      ymd: requestedDate.ymd,
+      grade: command.grade,
+      classNm: command.classNumber,
+    });
+
+    if (rows.length === 0) {
+      return `${requestedDate.label} 시간표 정보가 없어요.`;
+    }
+
+    const timetableText = formatTimetableRows(rows)
+      .replace(/\s*\n\s*/gu, ", ")
+      .slice(0, 320);
+    return `${requestedDate.label} ${command.grade}학년 ${command.classNumber}반 시간표는 ${timetableText}입니다.`;
+  }
+
+  return "그 명령은 아직 음성으로 실행할 수 없어요. 도움말이라고 말해 보세요.";
+}
+
 async function handleLeaveVoiceCommand(interaction) {
   try {
     const guild = interaction.guild;
@@ -4455,6 +4922,15 @@ async function handleLeaveVoiceCommand(interaction) {
         flags: MessageFlags.Ephemeral,
       });
       return;
+    }
+
+    if (voiceAssistantTargetUserByGuild.has(guild.id)) {
+      await updateVoiceAssistantConfig(guild.id, {
+        enabled: false,
+        userId: null,
+      });
+      voiceAssistantTargetUserByGuild.delete(guild.id);
+      stopVoiceAssistantRuntime(guild.id);
     }
 
     connection.destroy();
@@ -5420,7 +5896,7 @@ async function ensureTtsConnectionForChannel(voiceChannel) {
         channelId: voiceChannel.id,
         guildId,
         adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-        selfDeaf: true,
+        selfDeaf: false,
       });
 
       bindTtsVoiceConnectionHandlers(connection, guildId, voiceChannel.id);
@@ -5500,7 +5976,7 @@ async function maybeDisconnectTtsIfNoEnabledUser(guildId) {
   const runtime = ttsRuntimeByGuild.get(guildId);
   const hasEnabledUsers = await hasEnabledTtsUsersInGuild(guildId);
 
-  if (hasEnabledUsers) {
+  if (hasEnabledUsers || voiceAssistantTargetUserByGuild.has(guildId)) {
     return;
   }
 

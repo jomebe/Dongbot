@@ -8,14 +8,19 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/config.js && node --check src/firebase.js && node --check src/features/poll/pollConstants.js && node --check src/features/poll/pollUtils.js && node --check src/features/queue/queueConstants.js && node --check src/features/queue/queueUtils.js && node --check src/features/profanity/profanityUtils.js && node --check src/features/school/neisUtils.js && node --check src/utils/interactionUtils.js && node --check src/store/guildConfigStore.js && node --check src/store/ttsConfigStore.js && node --check src/store/ttsGuildConfigStore.js && node --check src/store/loggingConfigStore.js && node --check src/store/pollStore.js && node --check src/store/queueStore.js && node --check src/store/autoRoleConfigStore.js && node --check src/store/schoolConfigStore.js && node --check src/store/reactionRoleStore.js && node --check src/store/profanityConfigStore.js"
+    "test": "node --test",
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/firebase.js && node --check src/features/poll/pollConstants.js && node --check src/features/poll/pollUtils.js && node --check src/features/queue/queueConstants.js && node --check src/features/queue/queueUtils.js && node --check src/features/profanity/profanityUtils.js && node --check src/features/school/neisUtils.js && node --check src/features/voice/discordVoiceCapture.js && node --check src/features/voice/nvidiaAsrClient.js && node --check src/features/voice/voiceCommandParser.js && node --check src/utils/interactionUtils.js && node --check src/store/guildConfigStore.js && node --check src/store/ttsConfigStore.js && node --check src/store/ttsGuildConfigStore.js && node --check src/store/voiceAssistantConfigStore.js && node --check src/store/loggingConfigStore.js && node --check src/store/pollStore.js && node --check src/store/queueStore.js && node --check src/store/autoRoleConfigStore.js && node --check src/store/schoolConfigStore.js && node --check src/store/reactionRoleStore.js && node --check src/store/profanityConfigStore.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
     "discord.js": "^14.21.0",
     "dotenv": "^16.5.0",
     "firebase": "^11.7.1",
     "msedge-tts": "^2.0.4",
+    "opusscript": "^0.0.8",
+    "prism-media": "^1.3.5",
     "tweetnacl": "^1.0.3"
   }
 }
