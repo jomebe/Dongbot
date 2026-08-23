@@ -118,11 +118,8 @@ function buildWakePattern(wakeWord) {
 }
 
 export class WakeWordSession {
-  constructor({ wakeWord = "동봇", timeoutMs = 10_000, now = Date.now } = {}) {
+  constructor({ wakeWord = "동봇" } = {}) {
     this.wakePattern = buildWakePattern(wakeWord);
-    this.timeoutMs = timeoutMs;
-    this.now = now;
-    this.armedUntil = 0;
   }
 
   consume(rawTranscript) {
@@ -130,15 +127,10 @@ export class WakeWordSession {
     const wakeMatch = transcript.match(this.wakePattern);
 
     if (wakeMatch) {
-      this.armedUntil = this.now() + this.timeoutMs;
       const commandText = transcript
         .slice((wakeMatch.index ?? 0) + wakeMatch[0].length)
         .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
         .trim();
-
-      if (commandText) {
-        this.armedUntil = 0;
-      }
 
       return {
         awakened: true,
@@ -146,15 +138,6 @@ export class WakeWordSession {
       };
     }
 
-    if (this.now() <= this.armedUntil) {
-      this.armedUntil = 0;
-      return {
-        awakened: false,
-        commandText: transcript || null,
-      };
-    }
-
-    this.armedUntil = 0;
     return null;
   }
 }

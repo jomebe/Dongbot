@@ -4740,9 +4740,7 @@ async function handleVoiceAssistantCommand(interaction) {
     voiceAssistantTargetUserByGuild.set(guild.id, interaction.user.id);
 
     await safeInteractionReply(interaction, {
-      content:
-        `음성비서를 켰어요. “${voiceAssistantWakeWord}”이라고 부르면 “네”라고 답하고 ` +
-        "10초 동안 다음 명령을 기다려요. 같은 문장에 명령을 이어 말해도 돼요.",
+      content: `음성비서를 켰어요. “${voiceAssistantWakeWord} 인원 5명”처럼 호출어와 명령을 한 문장으로 말해 주세요.`,
       flags: MessageFlags.Ephemeral,
     });
   } catch (error) {
@@ -4834,15 +4832,6 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
 
       if (!wakeResult) {
         return;
-      }
-
-      if (wakeResult.awakened) {
-        enqueueTtsPlayback(
-          guild,
-          voiceChannel,
-          "ko-KR-SunHiNeural",
-          "네",
-        );
       }
 
       if (!wakeResult.commandText) {

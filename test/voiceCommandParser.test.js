@@ -8,33 +8,24 @@ import {
 
 test("호출어 뒤의 같은 발화 명령을 추출한다", () => {
   const session = new WakeWordSession();
-  assert.deepEqual(session.consume("동 봇아 방 인원 5명으로 해줘"), {
+  assert.deepEqual(session.consume("동봇 인원 5명"), {
     awakened: true,
-    commandText: "방 인원 5명으로 해줘",
+    commandText: "인원 5명",
   });
 });
 
-test("호출 후 다음 발화를 10초 동안 명령으로 받는다", () => {
-  let now = 1_000;
-  const session = new WakeWordSession({ now: () => now });
+test("호출어만 말하면 다음 발화를 명령으로 받지 않는다", () => {
+  const session = new WakeWordSession();
 
   assert.deepEqual(session.consume("동봇"), {
     awakened: true,
     commandText: null,
   });
-
-  now += 3_000;
-  assert.deepEqual(session.consume("방 이름 게임방으로 바꿔줘"), {
-    awakened: false,
-    commandText: "방 이름 게임방으로 바꿔줘",
-  });
+  assert.equal(session.consume("방 이름 게임방으로 바꿔줘"), null);
 });
 
-test("호출 제한 시간이 지나면 일반 대화를 무시한다", () => {
-  let now = 1_000;
-  const session = new WakeWordSession({ now: () => now });
-  session.consume("동봇");
-  now += 10_001;
+test("호출어 없는 일반 대화를 무시한다", () => {
+  const session = new WakeWordSession();
   assert.equal(session.consume("방 인원 5명"), null);
 });
 
