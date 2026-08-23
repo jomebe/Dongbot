@@ -39,7 +39,7 @@ npm install
 - `FIREBASE_MEASUREMENT_ID` (선택)
 - `NVIDIA_API_KEY` (음성비서 사용 시 필수)
 - `NVIDIA_ASR_SERVER` (기본값: `grpc.nvcf.nvidia.com:443`)
-- `NVIDIA_ASR_FUNCTION_ID` (기본값: NVIDIA Canary 1B ASR)
+- `NVIDIA_ASR_FUNCTION_ID` (기본값: NVIDIA Parakeet 1.1B RNNT Multilingual ASR)
 - `VOICE_ASSISTANT_WAKE_WORD` (기본값: `동봇`)
 
 음성 채널에서 `/stt테스트`를 실행하고 한 문장을 말하면 NVIDIA STT가 인식한 원문을 개인 응답으로 확인할 수 있습니다.

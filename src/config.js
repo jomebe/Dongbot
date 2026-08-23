@@ -26,7 +26,7 @@ export const nvidiaAsrServer =
   process.env.NVIDIA_ASR_SERVER ?? "grpc.nvcf.nvidia.com:443";
 export const nvidiaAsrFunctionId =
   process.env.NVIDIA_ASR_FUNCTION_ID ??
-  "b0e8b4a5-217c-40b7-9b96-17d84e666317";
+  "71203149-d3b7-4460-8231-1be2543a1fca";
 export const voiceAssistantWakeWord =
   process.env.VOICE_ASSISTANT_WAKE_WORD ?? "동봇";
 

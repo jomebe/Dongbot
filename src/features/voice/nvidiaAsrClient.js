@@ -48,7 +48,7 @@ export function createNvidiaAsrClient({
           speechContexts: [
             {
               phrases: [wakeWord],
-              boost: 18,
+              boost: 50,
             },
           ],
           audioChannelCount: 1,
