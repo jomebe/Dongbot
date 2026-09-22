@@ -6033,6 +6033,8 @@ function getOrCreateTtsRuntime(guildId) {
     queue: [],
     processing: false,
     subscription: null,
+    generation: 0,
+    currentText: null,
   };
 
   player.on("error", (error) => {
@@ -6043,6 +6045,33 @@ function getOrCreateTtsRuntime(guildId) {
   return runtime;
 }
 
+function interruptTtsPlayback(guildId, reason = "interrupt") {
+  const runtime = ttsRuntimeByGuild.get(guildId);
+
+  if (!runtime) {
+    return false;
+  }
+
+  const hadActiveAudio =
+    runtime.player.state.status !== AudioPlayerStatus.Idle ||
+    runtime.queue.length > 0 ||
+    Boolean(runtime.currentText);
+
+  if (!hadActiveAudio) {
+    return false;
+  }
+
+  runtime.generation += 1;
+  runtime.queue.length = 0;
+  runtime.currentText = null;
+  runtime.player.stop(true);
+
+  console.log(
+    `[voice-assistant] TTS interrupted guild=${guildId} reason=${reason}`,
+  );
+  return true;
+}
+
 function enqueueTtsPlayback(guild, voiceChannel, voiceShortName, text) {
   const runtime = getOrCreateTtsRuntime(guild.id);
 
@@ -6051,6 +6080,34 @@ function enqueueTtsPlayback(guild, voiceChannel, voiceShortName, text) {
     voiceChannel,
     voiceShortName,
     text,
+    generation: runtime.generation,
+  });
+
+  if (!runtime.processing) {
+    void processTtsQueue(guild.id);
+  }
+}
+
+function enqueuePriorityTtsPlayback(guild, voiceChannel, voiceShortName, text) {
+  const runtime = getOrCreateTtsRuntime(guild.id);
+
+  if (
+    runtime.currentText === text &&
+    runtime.player.state.status !== AudioPlayerStatus.Idle
+  ) {
+    return;
+  }
+
+  runtime.generation += 1;
+  runtime.queue.length = 0;
+  runtime.player.stop(true);
+
+  runtime.queue.unshift({
+    guild,
+    voiceChannel,
+    voiceShortName,
+    text,
+    generation: runtime.generation,
   });
 
   if (!runtime.processing) {
@@ -6075,6 +6132,10 @@ async function processTtsQueue(guildId) {
         continue;
       }
 
+      if (nextItem.generation !== runtime.generation) {
+        continue;
+      }
+
       const missingVoicePermissions = getMissingTtsVoicePermissions(nextItem.voiceChannel);
 
       if (missingVoicePermissions.length > 0) {
@@ -6094,7 +6155,16 @@ async function processTtsQueue(guildId) {
         attempt += 1;
 
         try {
+          if (nextItem.generation !== runtime.generation) {
+            break;
+          }
+
           const connection = await ensureTtsConnectionForChannel(nextItem.voiceChannel);
+
+          if (nextItem.generation !== runtime.generation) {
+            break;
+          }
+
           runtime.subscription = connection.subscribe(runtime.player);
 
           if (!runtime.subscription) {
@@ -6107,19 +6177,37 @@ async function processTtsQueue(guildId) {
             outputFormat,
           );
 
+          if (nextItem.generation !== runtime.generation) {
+            audioStream.destroy?.();
+            break;
+          }
+
           const resource = createAudioResource(audioStream, {
             // Probe reported this stream can be arbitrary, so let the transformer graph decode it.
             inputType: StreamType.Arbitrary,
           });
 
+          runtime.currentText = nextItem.text;
           runtime.player.play(resource);
 
-          await waitForTtsPlayback(runtime.player);
+          await waitForTtsPlayback(
+            runtime.player,
+            () => nextItem.generation !== runtime.generation,
+          );
+
+          if (nextItem.generation !== runtime.generation) {
+            break;
+          }
+
           playbackCompleted = true;
           console.log(
             `[voice-assistant] TTS played guild=${guildId} text=${JSON.stringify(nextItem.text)}`,
           );
         } catch (error) {
+          if (nextItem.generation !== runtime.generation) {
+            break;
+          }
+
           const canRetry = attempt < TTS_OUTPUT_FORMAT_FALLBACKS.length;
 
           if (canRetry) {
@@ -6146,14 +6234,19 @@ async function processTtsQueue(guildId) {
           break;
         }
       }
+
+      if (runtime.currentText === nextItem.text) {
+        runtime.currentText = null;
+      }
     }
   } finally {
+    runtime.currentText = null;
     runtime.processing = false;
     await maybeDisconnectTtsIfNoEnabledUser(guildId);
   }
 }
 
-async function waitForTtsPlayback(player) {
+async function waitForTtsPlayback(player, shouldAbort = () => false) {
   await new Promise((resolve, reject) => {
     let settled = false;
     let hasStarted = player.state.status === AudioPlayerStatus.Playing;
@@ -6199,15 +6292,30 @@ async function waitForTtsPlayback(player) {
       }
 
       endTimeoutHandle = setTimeout(() => {
+        if (shouldAbort()) {
+          resolveOnce();
+          return;
+        }
+
         rejectOnce(new Error("TTS playback completion timed out"));
       }, TTS_PLAYBACK_END_TIMEOUT_MS);
     };
 
     const handleError = (error) => {
+      if (shouldAbort()) {
+        resolveOnce();
+        return;
+      }
+
       rejectOnce(error);
     };
 
     const handleStateChange = (_oldState, newState) => {
+      if (shouldAbort()) {
+        resolveOnce();
+        return;
+      }
+
       if (newState.status === AudioPlayerStatus.AutoPaused) {
         player.unpause();
         return;
@@ -6242,7 +6350,17 @@ async function waitForTtsPlayback(player) {
       return;
     }
 
+    if (shouldAbort()) {
+      resolveOnce();
+      return;
+    }
+
     startTimeoutHandle = setTimeout(() => {
+      if (shouldAbort()) {
+        resolveOnce();
+        return;
+      }
+
       rejectOnce(new Error("TTS playback start timed out"));
     }, TTS_PLAYBACK_START_TIMEOUT_MS);
   });
