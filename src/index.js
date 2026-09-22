@@ -4922,34 +4922,75 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       let commandText = null;
 
       if (wakeSession.isAwaitingCommand(now)) {
-        const parsedCandidates = transcriptList.map((text) => ({
-          text,
-          command: parseVoiceCommand(text),
-        }));
-        const selected =
-          parsedCandidates.find((candidate) => candidate.command.type !== "unknown") ??
-          parsedCandidates[0];
+        const repeatedWakeCandidates = transcriptList
+          .map((text) => ({
+            text,
+            wake: wakeSession.inspectWakeWord(text),
+          }))
+          .filter((candidate) => candidate.wake);
 
-        if (!selected) {
-          return;
-        }
+        if (repeatedWakeCandidates.length > 0) {
+          const actionableWake = repeatedWakeCandidates
+            .map((candidate) => ({
+              ...candidate,
+              command:
+                candidate.wake.commandText
+                  ? parseVoiceCommand(candidate.wake.commandText)
+                  : null,
+            }))
+            .find(
+              (candidate) =>
+                candidate.command && candidate.command.type !== "unknown",
+            );
 
-        wakeSession.consume(selected.text, now);
-        command = selected.command;
-        commandText = selected.text;
+          if (actionableWake) {
+            wakeSession.consume(actionableWake.text, now);
+            command = actionableWake.command;
+            commandText = actionableWake.wake.commandText;
+          } else {
+            wakeSession.armFollowUp(now);
+            console.log(
+              `[voice-assistant] repeated wake accepted guild=${guild.id} candidates=${JSON.stringify(repeatedWakeCandidates.map((candidate) => candidate.text))}`,
+            );
+            enqueueTtsPlayback(
+              guild,
+              voiceChannel,
+              "ko-KR-SunHiNeural",
+              "네.",
+            );
+            return;
+          }
+        } else {
+          const parsedCandidates = transcriptList.map((text) => ({
+            text,
+            command: parseVoiceCommand(text),
+          }));
+          const selected =
+            parsedCandidates.find(
+              (candidate) => candidate.command.type !== "unknown",
+            ) ?? parsedCandidates[0];
 
-        if (command.type === "unknown") {
-          wakeSession.armFollowUp(now);
-          console.log(
-            `[voice-assistant] follow-up not understood guild=${guild.id} text=${JSON.stringify(commandText)}`,
-          );
-          enqueueTtsPlayback(
-            guild,
-            voiceChannel,
-            "ko-KR-SunHiNeural",
-            "다시 말해줘.",
-          );
-          return;
+          if (!selected) {
+            return;
+          }
+
+          wakeSession.consume(selected.text, now);
+          command = selected.command;
+          commandText = selected.text;
+
+          if (command.type === "unknown") {
+            wakeSession.armFollowUp(now);
+            console.log(
+              `[voice-assistant] follow-up not understood guild=${guild.id} text=${JSON.stringify(commandText)}`,
+            );
+            enqueueTtsPlayback(
+              guild,
+              voiceChannel,
+              "ko-KR-SunHiNeural",
+              "다시 말해줘.",
+            );
+            return;
+          }
         }
       } else {
         const wakeCandidates = transcriptList
@@ -6053,6 +6094,9 @@ async function processTtsQueue(guildId) {
 
           await waitForTtsPlayback(runtime.player);
           playbackCompleted = true;
+          console.log(
+            `[voice-assistant] TTS played guild=${guildId} text=${JSON.stringify(nextItem.text)}`,
+          );
         } catch (error) {
           const canRetry = attempt < TTS_OUTPUT_FORMAT_FALLBACKS.length;
 
