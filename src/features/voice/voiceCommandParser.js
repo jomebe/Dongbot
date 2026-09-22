@@ -74,10 +74,21 @@ export function parseVoiceCommand(rawTranscript) {
   }
 
   const renameMatch = text.match(
-    /(?:(?:통화방|수다방|방)\s*)?이름(?:을|를)?\s+(.+)/u,
+    /(?:(?:통화방|수다방|방)\s*)이름(?:을|를)?\s+(.+?)\s*(?:으로|로)?\s*(?:바꿔|바꿔줘|변경|변경해|변경해줘|해|해줘|해주세요)$/u,
   );
   if (renameMatch) {
     const name = renameMatch[1].replace(POLITE_ENDING_PATTERN, "").trim();
+
+    if (name) {
+      return { type: "room-name", name };
+    }
+  }
+
+  const renamePrefixMatch = text.match(
+    /(?:(?:통화방|수다방|방)\s*)이름(?:을|를)?\s*변경\s+(.+)/u,
+  );
+  if (renamePrefixMatch) {
+    const name = renamePrefixMatch[1].replace(POLITE_ENDING_PATTERN, "").trim();
 
     if (name) {
       return { type: "room-name", name };
