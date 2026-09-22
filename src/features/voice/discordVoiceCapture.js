@@ -15,8 +15,9 @@ const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
 const MAX_UTTERANCE_MS = 15_000;
-const END_SILENCE_MS = 550;
+const END_SILENCE_MS = 280;
 const MIN_PCM_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 0.12;
+const MAX_PENDING_UTTERANCES = 2;
 const MAX_STEREO_PCM_BYTES =
   SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * (MAX_UTTERANCE_MS / 1000);
 
@@ -69,6 +70,7 @@ export function captureUserUtterances({
   userId,
   transcribe,
   onTranscript,
+  onSpeechStart = null,
   onError = console.error,
   onDebug = null,
 }) {
@@ -79,8 +81,18 @@ export function captureUserUtterances({
   let utterance = null;
   let silenceTimeout = null;
   let maxUtteranceTimeout = null;
-  let processingQueue = Promise.resolve();
   let restartTimeout = null;
+  let sequence = 0;
+  let transcriptionRunning = false;
+  const pendingTranscriptions = [];
+
+  const handleSpeakingStart = (speakingUserId) => {
+    if (!stopped && speakingUserId === userId) {
+      onSpeechStart?.();
+    }
+  };
+
+  receiver.speaking.on("start", handleSpeakingStart);
 
   const clearUtteranceTimers = () => {
     if (silenceTimeout) {
@@ -94,15 +106,50 @@ export function captureUserUtterances({
     }
   };
 
+  const drainTranscriptions = async () => {
+    if (transcriptionRunning || stopped) {
+      return;
+    }
+
+    transcriptionRunning = true;
+
+    try {
+      while (!stopped && pendingTranscriptions.length > 0) {
+        const item = pendingTranscriptions.shift();
+
+        try {
+          const transcript = await transcribe(item.monoPcm, item.metadata);
+
+          if (
+            (Array.isArray(transcript) && transcript.some(Boolean)) ||
+            (!Array.isArray(transcript) && transcript)
+          ) {
+            await onTranscript(transcript, item.metadata);
+          }
+        } catch (error) {
+          onError(error);
+        }
+      }
+    } finally {
+      transcriptionRunning = false;
+
+      if (!stopped && pendingTranscriptions.length > 0) {
+        void drainTranscriptions();
+      }
+    }
+  };
+
   const queueTranscription = (snapshot, decoderName) => {
     const stereoPcm = Buffer.concat(snapshot.chunks, snapshot.totalBytes);
     const monoPcm = downmixStereoToMono(stereoPcm);
+    const finalizedAt = Date.now();
 
     onDebug?.({
       decoder: decoderName,
       decodedPackets: snapshot.decodedPackets,
       droppedPackets: snapshot.droppedPackets,
       pcmBytes: monoPcm.length,
+      queueDepth: pendingTranscriptions.length,
     });
 
     if (monoPcm.length < MIN_PCM_BYTES) {
@@ -116,24 +163,28 @@ export function captureUserUtterances({
       return;
     }
 
-    processingQueue = processingQueue
-      .then(async () => {
-        if (stopped) {
-          return;
-        }
-
-        const transcript = await transcribe(monoPcm);
-
-        if (
-          (Array.isArray(transcript) && transcript.some(Boolean)) ||
-          (!Array.isArray(transcript) && transcript)
-        ) {
-          await onTranscript(transcript);
-        }
-      })
-      .catch((error) => {
-        onError(error);
+    if (pendingTranscriptions.length >= MAX_PENDING_UTTERANCES) {
+      pendingTranscriptions.shift();
+      onDebug?.({
+        decoder: decoderName,
+        decodedPackets: 0,
+        droppedPackets: 0,
+        pcmBytes: 0,
+        queueDepth: pendingTranscriptions.length,
+        droppedPendingUtterance: true,
       });
+    }
+
+    pendingTranscriptions.push({
+      monoPcm,
+      metadata: {
+        sequence: ++sequence,
+        capturedAt: snapshot.startedAt,
+        finalizedAt,
+      },
+    });
+
+    void drainTranscriptions();
   };
 
   const finalizeUtterance = () => {
@@ -165,6 +216,7 @@ export function captureUserUtterances({
       totalBytes: 0,
       decodedPackets: 0,
       droppedPackets: 0,
+      startedAt: Date.now(),
     };
 
     maxUtteranceTimeout = setTimeout(
@@ -261,7 +313,9 @@ export function captureUserUtterances({
 
   return () => {
     stopped = true;
+    receiver.speaking.off("start", handleSpeakingStart);
     clearUtteranceTimers();
+    pendingTranscriptions.length = 0;
 
     if (restartTimeout) {
       clearTimeout(restartTimeout);
