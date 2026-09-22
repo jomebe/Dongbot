@@ -74,80 +74,51 @@ export function captureUserUtterances({
 }) {
   const receiver = connection.receiver;
   let stopped = false;
-  let busy = false;
-  let activeOpusStream = null;
-  let activePacketDecoder = null;
-  let captureTimeout = null;
+  let opusStream = null;
+  let packetDecoder = null;
+  let utterance = null;
+  let silenceTimeout = null;
+  let maxUtteranceTimeout = null;
+  let processingQueue = Promise.resolve();
+  let restartTimeout = null;
 
-  const clearCapture = () => {
-    if (captureTimeout) {
-      clearTimeout(captureTimeout);
-      captureTimeout = null;
+  const clearUtteranceTimers = () => {
+    if (silenceTimeout) {
+      clearTimeout(silenceTimeout);
+      silenceTimeout = null;
     }
 
-    activeOpusStream = null;
-    activePacketDecoder = null;
+    if (maxUtteranceTimeout) {
+      clearTimeout(maxUtteranceTimeout);
+      maxUtteranceTimeout = null;
+    }
   };
 
-  const handleSpeakingStart = (speakingUserId) => {
-    if (stopped || busy || speakingUserId !== userId) {
+  const queueTranscription = (snapshot, decoderName) => {
+    const stereoPcm = Buffer.concat(snapshot.chunks, snapshot.totalBytes);
+    const monoPcm = downmixStereoToMono(stereoPcm);
+
+    onDebug?.({
+      decoder: decoderName,
+      decodedPackets: snapshot.decodedPackets,
+      droppedPackets: snapshot.droppedPackets,
+      pcmBytes: monoPcm.length,
+    });
+
+    if (monoPcm.length < MIN_PCM_BYTES) {
+      if (snapshot.droppedPackets > 0 && snapshot.decodedPackets === 0) {
+        onError(
+          new Error(
+            `Opus utterance contained no decodable packets (dropped=${snapshot.droppedPackets})`,
+          ),
+        );
+      }
       return;
     }
 
-    busy = true;
-    const chunks = [];
-    let totalBytes = 0;
-    let decodedPackets = 0;
-    let droppedPackets = 0;
-    let finalized = false;
-
-    const opusStream = receiver.subscribe(userId, {
-      end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: END_SILENCE_MS,
-      },
-    });
-    const packetDecoder = createPacketDecoder();
-
-    activeOpusStream = opusStream;
-    activePacketDecoder = packetDecoder;
-
-    const finalize = async () => {
-      if (finalized) {
-        return;
-      }
-
-      finalized = true;
-
-      if (captureTimeout) {
-        clearTimeout(captureTimeout);
-        captureTimeout = null;
-      }
-
-      opusStream.removeAllListeners();
-      opusStream.destroy();
-      packetDecoder.close();
-      clearCapture();
-
-      try {
-        const stereoPcm = Buffer.concat(chunks, totalBytes);
-        const monoPcm = downmixStereoToMono(stereoPcm);
-
-        onDebug?.({
-          decoder: packetDecoder.name,
-          decodedPackets,
-          droppedPackets,
-          pcmBytes: monoPcm.length,
-        });
-
-        if (monoPcm.length < MIN_PCM_BYTES) {
-          if (droppedPackets > 0 && decodedPackets === 0) {
-            onError(
-              new Error(
-                `Opus utterance contained no decodable packets (dropped=${droppedPackets})`,
-              ),
-            );
-          }
+    processingQueue = processingQueue
+      .then(async () => {
+        if (stopped) {
           return;
         }
 
@@ -159,61 +130,149 @@ export function captureUserUtterances({
         ) {
           await onTranscript(transcript);
         }
-      } catch (error) {
+      })
+      .catch((error) => {
         onError(error);
-      } finally {
-        busy = false;
-      }
+      });
+  };
+
+  const finalizeUtterance = () => {
+    if (!utterance) {
+      return;
+    }
+
+    const snapshot = utterance;
+    utterance = null;
+    clearUtteranceTimers();
+    queueTranscription(snapshot, packetDecoder?.name ?? "unknown");
+  };
+
+  const scheduleSilenceFinalize = () => {
+    if (silenceTimeout) {
+      clearTimeout(silenceTimeout);
+    }
+
+    silenceTimeout = setTimeout(finalizeUtterance, END_SILENCE_MS);
+  };
+
+  const beginUtterance = () => {
+    if (utterance) {
+      return;
+    }
+
+    utterance = {
+      chunks: [],
+      totalBytes: 0,
+      decodedPackets: 0,
+      droppedPackets: 0,
     };
 
-    opusStream.on("data", (packet) => {
-      if (totalBytes >= MAX_STEREO_PCM_BYTES) {
+    maxUtteranceTimeout = setTimeout(
+      finalizeUtterance,
+      MAX_UTTERANCE_MS,
+    );
+  };
+
+  const handlePacket = (packet) => {
+    if (stopped) {
+      return;
+    }
+
+    beginUtterance();
+
+    try {
+      const decoded = packetDecoder.decode(packet);
+
+      if (decoded?.length) {
+        utterance.decodedPackets += 1;
+
+        if (utterance.totalBytes < MAX_STEREO_PCM_BYTES) {
+          const remainingBytes =
+            MAX_STEREO_PCM_BYTES - utterance.totalBytes;
+          const nextChunk =
+            decoded.length <= remainingBytes
+              ? decoded
+              : decoded.subarray(0, remainingBytes);
+          utterance.chunks.push(nextChunk);
+          utterance.totalBytes += nextChunk.length;
+        }
+      }
+    } catch {
+      // A damaged Discord Opus packet should not discard the entire phrase.
+      utterance.droppedPackets += 1;
+    }
+
+    scheduleSilenceFinalize();
+
+    if (utterance?.totalBytes >= MAX_STEREO_PCM_BYTES) {
+      finalizeUtterance();
+    }
+  };
+
+  const startPermanentSubscription = () => {
+    if (stopped) {
+      return;
+    }
+
+    packetDecoder?.close();
+    packetDecoder = createPacketDecoder();
+
+    opusStream = receiver.subscribe(userId, {
+      end: {
+        behavior: EndBehaviorType.Manual,
+      },
+    });
+
+    let streamClosed = false;
+    const handleStreamClosed = (error = null) => {
+      if (streamClosed) {
         return;
       }
 
-      try {
-        const decoded = packetDecoder.decode(packet);
+      streamClosed = true;
+      finalizeUtterance();
 
-        if (!decoded?.length) {
-          return;
-        }
-
-        decodedPackets += 1;
-        const remainingBytes = MAX_STEREO_PCM_BYTES - totalBytes;
-        const nextChunk =
-          decoded.length <= remainingBytes
-            ? decoded
-            : decoded.subarray(0, remainingBytes);
-        chunks.push(nextChunk);
-        totalBytes += nextChunk.length;
-      } catch {
-        // Discord can occasionally deliver a corrupt/partial Opus packet.
-        // Drop only that packet instead of throwing away the whole utterance.
-        droppedPackets += 1;
+      if (error) {
+        onError(error);
       }
-    });
 
-    opusStream.once("end", () => void finalize());
-    opusStream.once("close", () => void finalize());
-    opusStream.once("error", (error) => {
-      onError(error);
-      void finalize();
-    });
+      if (stopped) {
+        return;
+      }
 
-    captureTimeout = setTimeout(() => void finalize(), MAX_UTTERANCE_MS);
+      packetDecoder?.close();
+      packetDecoder = null;
+      opusStream = null;
+
+      if (restartTimeout) {
+        clearTimeout(restartTimeout);
+      }
+
+      restartTimeout = setTimeout(startPermanentSubscription, 150);
+    };
+
+    opusStream.on("data", handlePacket);
+    opusStream.once("end", () => handleStreamClosed());
+    opusStream.once("close", () => handleStreamClosed());
+    opusStream.once("error", (error) => handleStreamClosed(error));
   };
 
-  receiver.speaking.on("start", handleSpeakingStart);
+  startPermanentSubscription();
 
   return () => {
     stopped = true;
-    receiver.speaking.off("start", handleSpeakingStart);
+    clearUtteranceTimers();
 
-    if (captureTimeout) {
-      clearTimeout(captureTimeout);
+    if (restartTimeout) {
+      clearTimeout(restartTimeout);
+      restartTimeout = null;
     }
 
-    activeOpusStream?.destroy();
-    activePacketDecoder?.close();
+    opusStream?.removeAllListeners();
+    opusStream?.destroy();
+    packetDecoder?.close();
+    opusStream = null;
+    packetDecoder = null;
+    utterance = null;
   };
 }
