@@ -4521,6 +4521,18 @@ async function restoreVoiceAssistants() {
 
       if (voiceChannel?.type === ChannelType.GuildVoice) {
         await startVoiceAssistantRuntime(guild, config.userId, voiceChannel);
+
+        if (process.env.VOICE_ASSISTANT_SELF_TEST === "1") {
+          console.log(
+            `[voice-assistant] running TTS self-test guild=${guild.id} channel=${voiceChannel.id}`,
+          );
+          enqueueTtsPlayback(
+            guild,
+            voiceChannel,
+            "ko-KR-SunHiNeural",
+            "동봇 음성비서 준비 완료",
+          );
+        }
       }
     } catch (error) {
       console.error(`음성비서 복원 실패 (guild=${guild.id})`, error);
