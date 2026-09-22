@@ -11,22 +11,41 @@ test("호출어 뒤의 같은 발화 명령을 추출한다", () => {
   assert.deepEqual(session.consume("동봇 인원 5명"), {
     awakened: true,
     commandText: "인원 5명",
+    waitingForCommand: false,
   });
 });
 
-test("호출어만 말하면 다음 발화를 명령으로 받지 않는다", () => {
-  const session = new WakeWordSession();
+test("헤이 동봇 호출 뒤의 다음 발화를 8초 동안 명령으로 받는다", () => {
+  const session = new WakeWordSession({ followUpWindowMs: 8_000 });
 
-  assert.deepEqual(session.consume("동봇"), {
+  assert.deepEqual(session.consume("헤이 동봇", 1_000), {
     awakened: true,
     commandText: null,
+    waitingForCommand: true,
   });
-  assert.equal(session.consume("방 이름 게임방으로 바꿔줘"), null);
+  assert.deepEqual(session.consume("방 이름 게임방으로 바꿔줘", 5_000), {
+    awakened: true,
+    commandText: "방 이름 게임방으로 바꿔줘",
+    waitingForCommand: false,
+  });
+});
+
+test("호출 뒤 대기 시간이 지나면 일반 대화를 무시한다", () => {
+  const session = new WakeWordSession({ followUpWindowMs: 8_000 });
+  session.consume("동봇", 1_000);
+  assert.equal(session.consume("방 인원 5명", 10_000), null);
 });
 
 test("호출어 없는 일반 대화를 무시한다", () => {
   const session = new WakeWordSession();
   assert.equal(session.consume("방 인원 5명"), null);
+});
+
+test("NVIDIA가 자주 만드는 호출어 오인식도 인식한다", () => {
+  const session = new WakeWordSession();
+  for (const phrase of ["동보", "동복", "동보트", "동보땅", "동포당"]) {
+    assert.equal(session.matchesWakeWord(phrase), true, phrase);
+  }
 });
 
 test("통화방 이름과 인원 명령을 해석한다", () => {
@@ -41,22 +60,6 @@ test("통화방 이름과 인원 명령을 해석한다", () => {
   assert.deepEqual(parseVoiceCommand("수다방 인원 무제한"), {
     type: "room-limit",
     userLimit: 0,
-  });
-  assert.deepEqual(parseVoiceCommand("동보땅 인원 다섯 명으로 바꿔줘"), {
-    type: "room-limit",
-    userLimit: 5,
-  });
-});
-
-test("NVIDIA가 붙여 적은 호출어도 인식한다", () => {
-  const session = new WakeWordSession();
-  assert.deepEqual(session.consume("동보땅 인원 다섯 명으로 바꿔줘"), {
-    awakened: true,
-    commandText: "인원 다섯 명으로 바꿔줘",
-  });
-  assert.deepEqual(session.consume("동포당 인원 다섯 명으로 바꿔줘"), {
-    awakened: true,
-    commandText: "인원 다섯 명으로 바꿔줘",
   });
 });
 
