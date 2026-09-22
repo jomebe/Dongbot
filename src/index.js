@@ -4838,58 +4838,87 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
   runtime.stopListening = captureUserUtterances({
     connection,
     userId,
-    transcribe: async (pcmBuffer) => {
-      const jobs = [
-        {
-          name: "parakeet",
-          promise: nvidiaAsrClient.transcribePcm(pcmBuffer),
-        },
-      ];
+    transcribe: async (pcmBuffer, metadata = {}) => {
+      const asList = (value) =>
+        (Array.isArray(value) ? value : [value])
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+          .filter((item, index, values) => values.indexOf(item) === index);
 
-      if (nvidiaAsrFallbackClient) {
-        jobs.push({
-          name: "whisper-large-v3",
-          promise: nvidiaAsrFallbackClient.transcribePcm(pcmBuffer),
-        });
+      let primaryList = [];
+      let primaryError = null;
+
+      try {
+        primaryList = asList(await nvidiaAsrClient.transcribePcm(pcmBuffer));
+      } catch (error) {
+        primaryError = error;
+        console.warn(
+          `음성 ASR 실패 (guild=${guild.id}, model=parakeet)`,
+          error,
+        );
       }
 
-      const settled = await Promise.allSettled(jobs.map((job) => job.promise));
-      const transcripts = [];
-      let firstError = null;
+      const primaryHasWake = primaryList.some((value) =>
+        wakeSession.matchesWakeWord(value),
+      );
 
-      settled.forEach((result, index) => {
-        const job = jobs[index];
-
-        if (result.status === "rejected") {
-          firstError ??= result.reason;
-          console.warn(
-            `음성 ASR 실패 (guild=${guild.id}, model=${job.name})`,
-            result.reason,
-          );
-          return;
-        }
-
-        const values = Array.isArray(result.value) ? result.value : [result.value];
-
-        for (const value of values) {
-          const text = String(value ?? "").trim();
-
-          if (text && !transcripts.includes(text)) {
-            transcripts.push(text);
-          }
-        }
-      });
-
-      if (transcripts.length === 0 && firstError) {
-        throw firstError;
+      if (primaryHasWake || wakeSession.isAwaitingCommand()) {
+        console.log(
+          `[voice-assistant] fast ASR guild=${guild.id} seq=${metadata.sequence ?? "?"} source=parakeet`,
+        );
+        return primaryList;
       }
 
-      return transcripts;
+      const likelyWakeHint = primaryList.some((value) =>
+        /(?:헤이|hey|동|봇|보|복|포)/iu.test(value),
+      );
+
+      if (
+        !nvidiaAsrFallbackClient ||
+        (primaryList.length > 0 && !likelyWakeHint)
+      ) {
+        if (primaryList.length === 0 && primaryError) {
+          throw primaryError;
+        }
+
+        return primaryList;
+      }
+
+      try {
+        const fallbackList = asList(
+          await nvidiaAsrFallbackClient.transcribePcm(pcmBuffer),
+        );
+        return [...primaryList, ...fallbackList].filter(
+          (value, index, values) => values.indexOf(value) === index,
+        );
+      } catch (error) {
+        console.warn(
+          `음성 ASR 실패 (guild=${guild.id}, model=whisper-large-v3)`,
+          error,
+        );
+
+        if (primaryList.length === 0 && primaryError) {
+          throw primaryError;
+        }
+
+        return primaryList;
+      }
     },
-    onTranscript: async (transcripts) => {
+    onTranscript: async (transcripts, metadata = {}) => {
       const currentRuntime = voiceAssistantRuntimeByGuild.get(guild.id);
 
       if (currentRuntime !== runtime) {
+        return;
+      }
+
+      const resultAgeMs = metadata.finalizedAt
+        ? Date.now() - metadata.finalizedAt
+        : 0;
+
+      if (resultAgeMs > 3_500) {
+        console.log(
+          `[voice-assistant] stale ASR dropped guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs}`,
+        );
         return;
       }
 
@@ -4903,7 +4932,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       }
 
       console.log(
-        `[voice-assistant] STT guild=${guild.id} candidates=${JSON.stringify(transcriptList)}`,
+        `[voice-assistant] STT guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} candidates=${JSON.stringify(transcriptList)}`,
       );
 
       const now = Date.now();
@@ -4941,7 +4970,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
             console.log(
               `[voice-assistant] repeated wake accepted guild=${guild.id} candidates=${JSON.stringify(repeatedWakeCandidates.map((candidate) => candidate.text))}`,
             );
-            enqueueTtsPlayback(
+            enqueuePriorityTtsPlayback(
               guild,
               voiceChannel,
               "ko-KR-SunHiNeural",
@@ -5009,7 +5038,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           console.log(
             `[voice-assistant] wake accepted guild=${guild.id} candidates=${JSON.stringify(wakeCandidates.map((candidate) => candidate.text))}`,
           );
-          enqueueTtsPlayback(
+          enqueuePriorityTtsPlayback(
             guild,
             voiceChannel,
             "ko-KR-SunHiNeural",
@@ -5047,9 +5076,19 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         );
       }
     },
-    onDebug: ({ decoder, decodedPackets, droppedPackets, pcmBytes }) => {
+    onSpeechStart: () => {
+      interruptTtsPlayback(guild.id, "user-barge-in");
+    },
+    onDebug: ({ decoder, decodedPackets, droppedPackets, pcmBytes, queueDepth, droppedPendingUtterance }) => {
+      if (droppedPendingUtterance) {
+        console.log(
+          `[voice-assistant] ASR backlog trimmed guild=${guild.id} queueDepth=${queueDepth ?? 0}`,
+        );
+        return;
+      }
+
       console.log(
-        `[voice-assistant] capture guild=${guild.id} decoder=${decoder} decoded=${decodedPackets} dropped=${droppedPackets} pcmBytes=${pcmBytes}`,
+        `[voice-assistant] capture guild=${guild.id} decoder=${decoder} decoded=${decodedPackets} dropped=${droppedPackets} pcmBytes=${pcmBytes} queueDepth=${queueDepth ?? 0}`,
       );
     },
     onError: (error) => {
