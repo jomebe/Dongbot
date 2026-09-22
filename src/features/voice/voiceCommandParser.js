@@ -131,40 +131,60 @@ export class WakeWordSession {
     return this.wakePattern.test(normalizeTranscript(rawTranscript));
   }
 
-  consume(rawTranscript, now = Date.now()) {
+  inspectWakeWord(rawTranscript) {
     const transcript = normalizeTranscript(rawTranscript);
     const wakeMatch = transcript.match(this.wakePattern);
 
-    if (wakeMatch) {
-      const commandText = transcript
-        .slice((wakeMatch.index ?? 0) + wakeMatch[0].length)
-        .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
-        .trim();
+    if (!wakeMatch) {
+      return null;
+    }
 
-      if (!commandText) {
-        this.awaitingCommandUntil = now + this.followUpWindowMs;
+    const commandText = transcript
+      .slice((wakeMatch.index ?? 0) + wakeMatch[0].length)
+      .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
+      .trim();
+
+    return {
+      awakened: true,
+      commandText: commandText || null,
+      waitingForCommand: !commandText,
+    };
+  }
+
+  isAwaitingCommand(now = Date.now()) {
+    if (now > this.awaitingCommandUntil) {
+      this.awaitingCommandUntil = 0;
+      return false;
+    }
+
+    return this.awaitingCommandUntil > 0;
+  }
+
+  armFollowUp(now = Date.now()) {
+    this.awaitingCommandUntil = now + this.followUpWindowMs;
+  }
+
+  consume(rawTranscript, now = Date.now()) {
+    const transcript = normalizeTranscript(rawTranscript);
+    const wakeResult = this.inspectWakeWord(transcript);
+
+    if (wakeResult) {
+      if (!wakeResult.commandText) {
+        this.armFollowUp(now);
       } else {
         this.awaitingCommandUntil = 0;
       }
 
-      return {
-        awakened: true,
-        commandText: commandText || null,
-        waitingForCommand: !commandText,
-      };
+      return wakeResult;
     }
 
-    if (transcript && now <= this.awaitingCommandUntil) {
+    if (transcript && this.isAwaitingCommand(now)) {
       this.awaitingCommandUntil = 0;
       return {
         awakened: true,
         commandText: transcript,
         waitingForCommand: false,
       };
-    }
-
-    if (now > this.awaitingCommandUntil) {
-      this.awaitingCommandUntil = 0;
     }
 
     return null;
