@@ -127,6 +127,10 @@ export class WakeWordSession {
     this.awaitingCommandUntil = 0;
   }
 
+  matchesWakeWord(rawTranscript) {
+    return this.wakePattern.test(normalizeTranscript(rawTranscript));
+  }
+
   consume(rawTranscript, now = Date.now()) {
     const transcript = normalizeTranscript(rawTranscript);
     const wakeMatch = transcript.match(this.wakePattern);
