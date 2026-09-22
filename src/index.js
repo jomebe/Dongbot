@@ -35,6 +35,7 @@ import {
   discordToken,
   neisApiKey,
   nvidiaApiKey,
+  nvidiaAsrFallbackFunctionId,
   nvidiaAsrFunctionId,
   nvidiaAsrServer,
   roomGeneratorChannelName,
@@ -349,6 +350,15 @@ const nvidiaAsrClient = nvidiaApiKey
       wakeWord: voiceAssistantWakeWord,
     })
   : null;
+const nvidiaAsrFallbackClient =
+  nvidiaApiKey && nvidiaAsrFallbackFunctionId
+    ? createNvidiaAsrClient({
+        apiKey: nvidiaApiKey,
+        functionId: nvidiaAsrFallbackFunctionId,
+        server: nvidiaAsrServer,
+        wakeWord: voiceAssistantWakeWord,
+      })
+    : null;
 
 const callRoomCommand = new SlashCommandBuilder()
   .setName(CALL_ROOM_COMMAND_NAME)
@@ -4582,7 +4592,7 @@ async function handleSttTestCommand(interaction) {
     await safeInteractionEditReply(interaction, {
       content: "🎙️ 준비됐어요. 지금부터 45초 안에 테스트할 문장을 한 번 말해 주세요.",
     });
-    const transcript = await new Promise((resolve, reject) => {
+    const transcripts = await new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         const error = new Error("STT test timed out");
         error.code = "STT_TEST_TIMEOUT";
@@ -4613,10 +4623,14 @@ async function handleSttTestCommand(interaction) {
         },
       });
     });
-    const quotedTranscript = transcript.replaceAll("\n", "\n> ");
+    const transcriptList = Array.isArray(transcripts) ? transcripts : [transcripts];
+    const quotedTranscript = transcriptList
+      .filter(Boolean)
+      .map((value, index) => `${index + 1}. ${value.replaceAll("\n", " ")}`)
+      .join("\n");
 
     await safeInteractionEditReply(interaction, {
-      content: `✅ STT 인식 결과\n> ${quotedTranscript}`,
+      content: `✅ STT 인식 결과\n> ${quotedTranscript || "(인식 결과 없음)"}`,
     });
   } catch (error) {
     console.error("STT 테스트 실패", error);
@@ -4740,7 +4754,7 @@ async function handleVoiceAssistantCommand(interaction) {
     voiceAssistantTargetUserByGuild.set(guild.id, interaction.user.id);
 
     await safeInteractionReply(interaction, {
-      content: `음성비서를 켰어요. “${voiceAssistantWakeWord} 인원 5명”처럼 호출어와 명령을 한 문장으로 말해 주세요.`,
+      content: `음성비서를 켰어요. “헤이 ${voiceAssistantWakeWord}”이라고 부른 뒤 명령을 말하거나, “${voiceAssistantWakeWord} 인원 5명”처럼 한 문장으로 말해도 돼요.`,
       flags: MessageFlags.Ephemeral,
     });
   } catch (error) {
@@ -4820,21 +4834,57 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
   runtime.stopListening = captureUserUtterances({
     connection,
     userId,
-    transcribe: (pcmBuffer) => nvidiaAsrClient.transcribePcm(pcmBuffer),
-    onTranscript: async (transcript) => {
+    transcribe: async (pcmBuffer) => {
+      const primary = await nvidiaAsrClient.transcribePcm(pcmBuffer);
+      const primaryList = Array.isArray(primary) ? primary : [primary];
+
+      if (primaryList.some((value) => wakeSession.matchesWakeWord(value))) {
+        return primaryList;
+      }
+
+      if (!nvidiaAsrFallbackClient) {
+        return primaryList;
+      }
+
+      try {
+        const fallback = await nvidiaAsrFallbackClient.transcribePcm(pcmBuffer);
+        return [...primaryList, ...(Array.isArray(fallback) ? fallback : [fallback])]
+          .filter(Boolean)
+          .filter((value, index, values) => values.indexOf(value) === index);
+      } catch (error) {
+        console.warn("Whisper ASR fallback failed; using primary ASR result.", error);
+        return primaryList;
+      }
+    },
+    onTranscript: async (transcripts) => {
       const currentRuntime = voiceAssistantRuntimeByGuild.get(guild.id);
 
       if (currentRuntime !== runtime) {
         return;
       }
 
-      const wakeResult = wakeSession.consume(transcript);
+      const transcriptList = Array.isArray(transcripts) ? transcripts : [transcripts];
+      let wakeResult = null;
+
+      for (const transcript of transcriptList) {
+        wakeResult = wakeSession.consume(transcript);
+
+        if (wakeResult) {
+          break;
+        }
+      }
 
       if (!wakeResult) {
         return;
       }
 
       if (!wakeResult.commandText) {
+        enqueueTtsPlayback(
+          guild,
+          voiceChannel,
+          "ko-KR-SunHiNeural",
+          "네.",
+        );
         return;
       }
 

@@ -106,7 +106,10 @@ export function parseVoiceCommand(rawTranscript) {
 
 function buildWakePattern(wakeWord) {
   if (wakeWord.replace(/\s+/gu, "") === "동봇") {
-    return /동\s*(?:봇|보(?:트|땅|탄|탕)?|포(?:당|탕)?|본|봄)(?:아|이)?/u;
+    // Korean ASR often hears the short wake phrase as "동보", "동복",
+    // "동보트" or splits it after "헤이". Keep this intentionally narrow
+    // enough to avoid waking on ordinary speech while accepting those errors.
+    return /(?:헤이\s*)?동\s*(?:봇|복|보(?:트|땅|탄|탕)?|포(?:당|탕)?|본|봄)(?:아|이)?/u;
   }
 
   const escaped = wakeWord
@@ -118,11 +121,17 @@ function buildWakePattern(wakeWord) {
 }
 
 export class WakeWordSession {
-  constructor({ wakeWord = "동봇" } = {}) {
+  constructor({ wakeWord = "동봇", followUpWindowMs = 8_000 } = {}) {
     this.wakePattern = buildWakePattern(wakeWord);
+    this.followUpWindowMs = followUpWindowMs;
+    this.awaitingCommandUntil = 0;
   }
 
-  consume(rawTranscript) {
+  matchesWakeWord(rawTranscript) {
+    return this.wakePattern.test(normalizeTranscript(rawTranscript));
+  }
+
+  consume(rawTranscript, now = Date.now()) {
     const transcript = normalizeTranscript(rawTranscript);
     const wakeMatch = transcript.match(this.wakePattern);
 
@@ -132,10 +141,30 @@ export class WakeWordSession {
         .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
         .trim();
 
+      if (!commandText) {
+        this.awaitingCommandUntil = now + this.followUpWindowMs;
+      } else {
+        this.awaitingCommandUntil = 0;
+      }
+
       return {
         awakened: true,
         commandText: commandText || null,
+        waitingForCommand: !commandText,
       };
+    }
+
+    if (transcript && now <= this.awaitingCommandUntil) {
+      this.awaitingCommandUntil = 0;
+      return {
+        awakened: true,
+        commandText: transcript,
+        waitingForCommand: false,
+      };
+    }
+
+    if (now > this.awaitingCommandUntil) {
+      this.awaitingCommandUntil = 0;
     }
 
     return null;
