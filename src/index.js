@@ -6036,6 +6036,8 @@ function getOrCreateTtsRuntime(guildId) {
     generation: 0,
     currentText: null,
     currentStartedAt: 0,
+    bargeInProtectedUntil: 0,
+    priorityText: null,
   };
 
   player.on("error", (error) => {
@@ -6062,12 +6064,7 @@ function interruptTtsPlayback(guildId, reason = "interrupt") {
     return false;
   }
 
-  const isProtectedWakeAck =
-    runtime.currentText === "네." &&
-    runtime.currentStartedAt > 0 &&
-    Date.now() - runtime.currentStartedAt < 800;
-
-  if (isProtectedWakeAck) {
+  if (Date.now() < runtime.bargeInProtectedUntil) {
     return false;
   }
 
@@ -6075,6 +6072,8 @@ function interruptTtsPlayback(guildId, reason = "interrupt") {
   runtime.queue.length = 0;
   runtime.currentText = null;
   runtime.currentStartedAt = 0;
+  runtime.bargeInProtectedUntil = 0;
+  runtime.priorityText = null;
   runtime.player.stop(true);
 
   console.log(
@@ -6101,10 +6100,11 @@ function enqueueTtsPlayback(guild, voiceChannel, voiceShortName, text) {
 
 function enqueuePriorityTtsPlayback(guild, voiceChannel, voiceShortName, text) {
   const runtime = getOrCreateTtsRuntime(guild.id);
+  const now = Date.now();
 
   if (
-    runtime.currentText === text &&
-    runtime.player.state.status !== AudioPlayerStatus.Idle
+    runtime.priorityText === text &&
+    now < runtime.bargeInProtectedUntil
   ) {
     return;
   }
@@ -6112,6 +6112,9 @@ function enqueuePriorityTtsPlayback(guild, voiceChannel, voiceShortName, text) {
   runtime.generation += 1;
   runtime.queue.length = 0;
   runtime.player.stop(true);
+  runtime.priorityText = text;
+  runtime.bargeInProtectedUntil =
+    text === "네." ? now + 1_600 : now + 500;
 
   runtime.queue.unshift({
     guild,
@@ -6251,10 +6254,24 @@ async function processTtsQueue(guildId) {
         runtime.currentText = null;
         runtime.currentStartedAt = 0;
       }
+
+      if (
+        nextItem.generation === runtime.generation &&
+        runtime.priorityText === nextItem.text
+      ) {
+        runtime.priorityText = null;
+        runtime.bargeInProtectedUntil = 0;
+      }
     }
   } finally {
     runtime.currentText = null;
     runtime.currentStartedAt = 0;
+
+    if (runtime.queue.length === 0) {
+      runtime.priorityText = null;
+      runtime.bargeInProtectedUntil = 0;
+    }
+
     runtime.processing = false;
     await maybeDisconnectTtsIfNoEnabledUser(guildId);
   }
