@@ -6035,6 +6035,7 @@ function getOrCreateTtsRuntime(guildId) {
     subscription: null,
     generation: 0,
     currentText: null,
+    currentStartedAt: 0,
   };
 
   player.on("error", (error) => {
@@ -6061,9 +6062,19 @@ function interruptTtsPlayback(guildId, reason = "interrupt") {
     return false;
   }
 
+  const isProtectedWakeAck =
+    runtime.currentText === "네." &&
+    runtime.currentStartedAt > 0 &&
+    Date.now() - runtime.currentStartedAt < 800;
+
+  if (isProtectedWakeAck) {
+    return false;
+  }
+
   runtime.generation += 1;
   runtime.queue.length = 0;
   runtime.currentText = null;
+  runtime.currentStartedAt = 0;
   runtime.player.stop(true);
 
   console.log(
@@ -6188,6 +6199,7 @@ async function processTtsQueue(guildId) {
           });
 
           runtime.currentText = nextItem.text;
+          runtime.currentStartedAt = Date.now();
           runtime.player.play(resource);
 
           await waitForTtsPlayback(
@@ -6237,10 +6249,12 @@ async function processTtsQueue(guildId) {
 
       if (runtime.currentText === nextItem.text) {
         runtime.currentText = null;
+        runtime.currentStartedAt = 0;
       }
     }
   } finally {
     runtime.currentText = null;
+    runtime.currentStartedAt = 0;
     runtime.processing = false;
     await maybeDisconnectTtsIfNoEnabledUser(guildId);
   }
