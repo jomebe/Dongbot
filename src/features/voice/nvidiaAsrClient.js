@@ -44,7 +44,7 @@ export function createNvidiaAsrClient({
           encoding: "LINEAR_PCM",
           sampleRateHertz: 48_000,
           languageCode,
-          maxAlternatives: 1,
+          maxAlternatives: 3,
           speechContexts: [
             {
               phrases: [wakeWord],
@@ -73,10 +73,25 @@ export function createNvidiaAsrClient({
         );
       });
 
-      return (response.results ?? [])
-        .map((result) => result.alternatives?.[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
+      const resultAlternatives = response.results ?? [];
+      const maxAlternativeCount = Math.max(
+        0,
+        ...resultAlternatives.map((result) => result.alternatives?.length ?? 0),
+      );
+      const transcripts = [];
+
+      for (let alternativeIndex = 0; alternativeIndex < maxAlternativeCount; alternativeIndex += 1) {
+        const transcript = resultAlternatives
+          .map((result) => result.alternatives?.[alternativeIndex]?.transcript ?? "")
+          .join(" ")
+          .trim();
+
+        if (transcript && !transcripts.includes(transcript)) {
+          transcripts.push(transcript);
+        }
+      }
+
+      return transcripts;
     },
     close() {
       client.close();
