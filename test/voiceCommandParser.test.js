@@ -63,6 +63,16 @@ test("통화방 이름과 인원 명령을 해석한다", () => {
   });
 });
 
+
+test("일반 대화의 이름 언급을 방 이름 변경으로 오인하지 않는다", () => {
+  assert.deepEqual(parseVoiceCommand("형 이름 왜 범활이야"), {
+    type: "unknown",
+  });
+  assert.deepEqual(parseVoiceCommand("내 이름 동화야"), {
+    type: "unknown",
+  });
+});
+
 test("TTS, 급식, 시간표 명령을 해석한다", () => {
   assert.deepEqual(parseVoiceCommand("티티에스 켜줘"), {
     type: "tts",
