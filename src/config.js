@@ -27,6 +27,9 @@ export const nvidiaAsrServer =
 export const nvidiaAsrFunctionId =
   process.env.NVIDIA_ASR_FUNCTION_ID ??
   "71203149-d3b7-4460-8231-1be2543a1fca";
+export const nvidiaAsrFallbackFunctionId =
+  process.env.NVIDIA_ASR_FALLBACK_FUNCTION_ID ??
+  "b702f636-f60c-4a3d-a6f4-f3568c13bd7d";
 export const voiceAssistantWakeWord =
   process.env.VOICE_ASSISTANT_WAKE_WORD ?? "동봇";
 
