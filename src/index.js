@@ -356,7 +356,10 @@ const nvidiaAsrFallbackClient =
         apiKey: nvidiaApiKey,
         functionId: nvidiaAsrFallbackFunctionId,
         server: nvidiaAsrServer,
+        languageCode: "ko",
         wakeWord: voiceAssistantWakeWord,
+        maxAlternatives: 1,
+        enableWakeWordBoost: false,
       })
     : null;
 
@@ -4835,26 +4838,52 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
     connection,
     userId,
     transcribe: async (pcmBuffer) => {
-      const primary = await nvidiaAsrClient.transcribePcm(pcmBuffer);
-      const primaryList = Array.isArray(primary) ? primary : [primary];
+      const jobs = [
+        {
+          name: "parakeet",
+          promise: nvidiaAsrClient.transcribePcm(pcmBuffer),
+        },
+      ];
 
-      if (primaryList.some((value) => wakeSession.matchesWakeWord(value))) {
-        return primaryList;
+      if (nvidiaAsrFallbackClient) {
+        jobs.push({
+          name: "whisper-large-v3",
+          promise: nvidiaAsrFallbackClient.transcribePcm(pcmBuffer),
+        });
       }
 
-      if (!nvidiaAsrFallbackClient) {
-        return primaryList;
+      const settled = await Promise.allSettled(jobs.map((job) => job.promise));
+      const transcripts = [];
+      let firstError = null;
+
+      settled.forEach((result, index) => {
+        const job = jobs[index];
+
+        if (result.status === "rejected") {
+          firstError ??= result.reason;
+          console.warn(
+            `음성 ASR 실패 (guild=${guild.id}, model=${job.name})`,
+            result.reason,
+          );
+          return;
+        }
+
+        const values = Array.isArray(result.value) ? result.value : [result.value];
+
+        for (const value of values) {
+          const text = String(value ?? "").trim();
+
+          if (text && !transcripts.includes(text)) {
+            transcripts.push(text);
+          }
+        }
+      });
+
+      if (transcripts.length === 0 && firstError) {
+        throw firstError;
       }
 
-      try {
-        const fallback = await nvidiaAsrFallbackClient.transcribePcm(pcmBuffer);
-        return [...primaryList, ...(Array.isArray(fallback) ? fallback : [fallback])]
-          .filter(Boolean)
-          .filter((value, index, values) => values.indexOf(value) === index);
-      } catch (error) {
-        console.warn("Whisper ASR fallback failed; using primary ASR result.", error);
-        return primaryList;
-      }
+      return transcripts;
     },
     onTranscript: async (transcripts) => {
       const currentRuntime = voiceAssistantRuntimeByGuild.get(guild.id);
@@ -4863,33 +4892,101 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         return;
       }
 
-      const transcriptList = Array.isArray(transcripts) ? transcripts : [transcripts];
-      let wakeResult = null;
+      const transcriptList = (Array.isArray(transcripts) ? transcripts : [transcripts])
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index);
 
-      for (const transcript of transcriptList) {
-        wakeResult = wakeSession.consume(transcript);
+      if (transcriptList.length === 0) {
+        return;
+      }
 
-        if (wakeResult) {
-          break;
+      console.log(
+        `[voice-assistant] STT guild=${guild.id} candidates=${JSON.stringify(transcriptList)}`,
+      );
+
+      const now = Date.now();
+      let command = null;
+      let commandText = null;
+
+      if (wakeSession.isAwaitingCommand(now)) {
+        const parsedCandidates = transcriptList.map((text) => ({
+          text,
+          command: parseVoiceCommand(text),
+        }));
+        const selected =
+          parsedCandidates.find((candidate) => candidate.command.type !== "unknown") ??
+          parsedCandidates[0];
+
+        if (!selected) {
+          return;
+        }
+
+        wakeSession.consume(selected.text, now);
+        command = selected.command;
+        commandText = selected.text;
+
+        if (command.type === "unknown") {
+          wakeSession.armFollowUp(now);
+          console.log(
+            `[voice-assistant] follow-up not understood guild=${guild.id} text=${JSON.stringify(commandText)}`,
+          );
+          enqueueTtsPlayback(
+            guild,
+            voiceChannel,
+            "ko-KR-SunHiNeural",
+            "다시 말해줘.",
+          );
+          return;
+        }
+      } else {
+        const wakeCandidates = transcriptList
+          .map((text) => ({
+            text,
+            wake: wakeSession.inspectWakeWord(text),
+          }))
+          .filter((candidate) => candidate.wake);
+
+        if (wakeCandidates.length === 0) {
+          return;
+        }
+
+        const actionable = wakeCandidates
+          .map((candidate) => ({
+            ...candidate,
+            command:
+              candidate.wake.commandText
+                ? parseVoiceCommand(candidate.wake.commandText)
+                : null,
+          }))
+          .find(
+            (candidate) =>
+              candidate.command && candidate.command.type !== "unknown",
+          );
+
+        if (actionable) {
+          wakeSession.consume(actionable.text, now);
+          command = actionable.command;
+          commandText = actionable.wake.commandText;
+        } else {
+          wakeSession.armFollowUp(now);
+          console.log(
+            `[voice-assistant] wake accepted guild=${guild.id} candidates=${JSON.stringify(wakeCandidates.map((candidate) => candidate.text))}`,
+          );
+          enqueueTtsPlayback(
+            guild,
+            voiceChannel,
+            "ko-KR-SunHiNeural",
+            "네.",
+          );
+          return;
         }
       }
 
-      if (!wakeResult) {
-        return;
-      }
-
-      if (!wakeResult.commandText) {
-        enqueueTtsPlayback(
-          guild,
-          voiceChannel,
-          "ko-KR-SunHiNeural",
-          "네.",
-        );
-        return;
-      }
-
       try {
-        const command = parseVoiceCommand(wakeResult.commandText);
+        console.log(
+          `[voice-assistant] command guild=${guild.id} type=${command.type} text=${JSON.stringify(commandText)}`,
+        );
         const reply = await executeVoiceAssistantCommand({
           guild,
           userId,
@@ -4913,6 +5010,11 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           "명령을 실행하는 중 오류가 발생했어요.",
         );
       }
+    },
+    onDebug: ({ decoder, decodedPackets, droppedPackets, pcmBytes }) => {
+      console.log(
+        `[voice-assistant] capture guild=${guild.id} decoder=${decoder} decoded=${decodedPackets} dropped=${droppedPackets} pcmBytes=${pcmBytes}`,
+      );
     },
     onError: (error) => {
       console.error(`음성 인식 실패 (guild=${guild.id})`, error);
@@ -4954,8 +5056,12 @@ async function getManagedVoiceRoomForUser(guild, userId) {
 }
 
 async function executeVoiceAssistantCommand({ guild, userId, command }) {
-  if (command.type === "help" || command.type === "unknown") {
+  if (command.type === "help") {
     return "방 이름 변경, 방 인원 변경, 티티에스 켜기와 끄기, 급식, 시간표, 나가기를 말할 수 있어요.";
+  }
+
+  if (command.type === "unknown") {
+    return "다시 말해줘.";
   }
 
   if (command.type === "leave") {
@@ -5843,7 +5949,7 @@ function getOrCreateTtsRuntime(guildId) {
 
   const player = createAudioPlayer({
     behaviors: {
-      noSubscriber: NoSubscriberBehavior.Pause,
+      noSubscriber: NoSubscriberBehavior.Play,
     },
   });
 
@@ -5851,6 +5957,7 @@ function getOrCreateTtsRuntime(guildId) {
     player,
     queue: [],
     processing: false,
+    subscription: null,
   };
 
   player.on("error", (error) => {
@@ -5913,7 +6020,11 @@ async function processTtsQueue(guildId) {
 
         try {
           const connection = await ensureTtsConnectionForChannel(nextItem.voiceChannel);
-          connection.subscribe(runtime.player);
+          runtime.subscription = connection.subscribe(runtime.player);
+
+          if (!runtime.subscription) {
+            throw new Error("TTS audio player subscription failed");
+          }
 
           const audioStream = await synthesizeTtsAudioStream(
             nextItem.text,
@@ -6020,7 +6131,7 @@ async function waitForTtsPlayback(player) {
 
     const handleStateChange = (_oldState, newState) => {
       if (newState.status === AudioPlayerStatus.AutoPaused) {
-        rejectOnce(new Error("TTS player entered auto-paused state"));
+        player.unpause();
         return;
       }
 
@@ -6045,8 +6156,7 @@ async function waitForTtsPlayback(player) {
     player.on("error", handleError);
 
     if (player.state.status === AudioPlayerStatus.AutoPaused) {
-      rejectOnce(new Error("TTS player entered auto-paused state"));
-      return;
+      player.unpause();
     }
 
     if (hasStarted) {
