@@ -19,6 +19,8 @@ export function createNvidiaAsrClient({
   server,
   languageCode = "ko-KR",
   wakeWord = "동봇",
+  maxAlternatives = 3,
+  enableWakeWordBoost = true,
 }) {
   if (!apiKey) {
     throw new Error("NVIDIA_API_KEY가 필요합니다.");
@@ -44,13 +46,17 @@ export function createNvidiaAsrClient({
           encoding: "LINEAR_PCM",
           sampleRateHertz: 48_000,
           languageCode,
-          maxAlternatives: 3,
-          speechContexts: [
-            {
-              phrases: [wakeWord],
-              boost: 50,
-            },
-          ],
+          maxAlternatives,
+          ...(enableWakeWordBoost
+            ? {
+                speechContexts: [
+                  {
+                    phrases: [wakeWord, `헤이 ${wakeWord}`, `헤이${wakeWord}`],
+                    boost: 80,
+                  },
+                ],
+              }
+            : {}),
           audioChannelCount: 1,
           enableAutomaticPunctuation: true,
         },
