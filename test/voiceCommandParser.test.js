@@ -60,6 +60,44 @@ test("헤이 동봇 계열만 호출어로 인식한다", () => {
   }
 });
 
+test("실제 Parakeet 짧은 호출어 오인식을 짧은 발화에서만 허용한다", () => {
+  const session = new WakeWordSession();
+  const observedVariants = [
+    "헤이 동",
+    "A동북",
+    "A동무",
+    "A2동무",
+    "A2동문",
+    "Э 동",
+    "Э. 동",
+    "Р. Э. 동",
+  ];
+
+  for (const phrase of observedVariants) {
+    assert.equal(
+      session.matchesWakeWord(phrase, { shortUtterance: true }),
+      true,
+      phrase,
+    );
+  }
+
+  for (const phrase of ["A동무", "Э 동", "Р. Э. 동"]) {
+    assert.equal(
+      session.matchesWakeWord(phrase, { shortUtterance: false }),
+      false,
+      phrase,
+    );
+  }
+
+  for (const phrase of ["동봇", "동봇 동봇", "감사합니다", "운동"]) {
+    assert.equal(
+      session.matchesWakeWord(phrase, { shortUtterance: true }),
+      false,
+      phrase,
+    );
+  }
+});
+
 test("호출어를 여러 번 반복해도 명령으로 취급하지 않는다", () => {
   const session = new WakeWordSession();
 
