@@ -10,6 +10,7 @@ import {
   joinVoiceChannel,
 } from "@discordjs/voice";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { Readable } from "node:stream";
 import {
   ActionRowBuilder,
   AuditLogEvent,
@@ -270,6 +271,8 @@ const TTS_OUTPUT_FORMAT_FALLBACKS = [
   OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3,
   OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS,
 ];
+const ttsShortAudioBufferCache = new Map();
+const ttsShortAudioBufferPromises = new Map();
 const JOIN_LEAVE_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_TTS_TEXT_CHANNEL_NAME = "🔊 | tts-채팅방";
 const LEGACY_TTS_TEXT_CHANNEL_NAMES = [
@@ -4828,6 +4831,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
   const wakeSession = new WakeWordSession({
     wakeWord: voiceAssistantWakeWord,
   });
+  prewarmWakeAckTts();
   const runtime = {
     channelId: voiceChannel.id,
     connection,
@@ -6500,7 +6504,7 @@ function isRecoverableVoiceDecodeError(error) {
   );
 }
 
-async function synthesizeTtsAudioStream(text, voiceShortName, outputFormat) {
+async function createEdgeTtsAudioStream(text, voiceShortName, outputFormat) {
   const tts = new MsEdgeTTS();
   const safeText = escapeXml(text);
 
@@ -6521,6 +6525,74 @@ async function synthesizeTtsAudioStream(text, voiceShortName, outputFormat) {
   audioStream.once("error", closeTtsConnection);
 
   return audioStream;
+}
+
+async function getCachedShortTtsBuffer(text, voiceShortName, outputFormat) {
+  const cacheKey = `${voiceShortName}|${outputFormat}|${text}`;
+  const cached = ttsShortAudioBufferCache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  let pending = ttsShortAudioBufferPromises.get(cacheKey);
+
+  if (!pending) {
+    pending = (async () => {
+      const audioStream = await createEdgeTtsAudioStream(
+        text,
+        voiceShortName,
+        outputFormat,
+      );
+      const chunks = [];
+
+      for await (const chunk of audioStream) {
+        chunks.push(Buffer.from(chunk));
+      }
+
+      const buffer = Buffer.concat(chunks);
+
+      if (buffer.length === 0) {
+        throw new Error("TTS returned empty audio");
+      }
+
+      ttsShortAudioBufferCache.set(cacheKey, buffer);
+      return buffer;
+    })();
+
+    ttsShortAudioBufferPromises.set(cacheKey, pending);
+
+    pending.finally(() => {
+      ttsShortAudioBufferPromises.delete(cacheKey);
+    });
+  }
+
+  return pending;
+}
+
+function prewarmWakeAckTts() {
+  const outputFormat = TTS_OUTPUT_FORMAT_FALLBACKS[0];
+
+  void getCachedShortTtsBuffer(
+    "네.",
+    "ko-KR-SunHiNeural",
+    outputFormat,
+  ).catch((error) => {
+    console.warn("Wake acknowledgement TTS prewarm failed", error);
+  });
+}
+
+async function synthesizeTtsAudioStream(text, voiceShortName, outputFormat) {
+  if (text === "네.") {
+    const buffer = await getCachedShortTtsBuffer(
+      text,
+      voiceShortName,
+      outputFormat,
+    );
+    return Readable.from([buffer]);
+  }
+
+  return createEdgeTtsAudioStream(text, voiceShortName, outputFormat);
 }
 
 function escapeXml(value) {
