@@ -4834,10 +4834,15 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
     stopListening: null,
     userId,
     lastWakeAckAt: 0,
+    lastWakeSequence: 0,
   };
 
-  const acknowledgeWake = (now = Date.now()) => {
+  const acknowledgeWake = (now = Date.now(), sequence = 0) => {
     wakeSession.armFollowUp(now);
+
+    if (sequence > 0) {
+      runtime.lastWakeSequence = Math.max(runtime.lastWakeSequence, sequence);
+    }
 
     if (now - runtime.lastWakeAckAt < 2_000) {
       console.log(
@@ -4960,6 +4965,19 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       let commandText = null;
 
       if (wakeSession.isAwaitingCommand(now)) {
+        const currentSequence = Number(metadata.sequence ?? 0);
+
+        if (
+          currentSequence > 0 &&
+          runtime.lastWakeSequence > 0 &&
+          currentSequence <= runtime.lastWakeSequence
+        ) {
+          console.log(
+            `[voice-assistant] pre-wake ASR dropped guild=${guild.id} seq=${currentSequence} wakeSeq=${runtime.lastWakeSequence}`,
+          );
+          return;
+        }
+
         const candidates = transcriptList.map((text) => {
           const wake = wakeSession.inspectWakeWord(text);
           const directCommand = parseVoiceCommand(text);
@@ -5008,7 +5026,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
             console.log(
               `[voice-assistant] repeated wake accepted guild=${guild.id} text=${JSON.stringify(repeatedWake.text)}`,
             );
-            acknowledgeWake(now);
+            acknowledgeWake(now, Number(metadata.sequence ?? 0));
             return;
           }
 
@@ -5050,7 +5068,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           console.log(
             `[voice-assistant] wake accepted guild=${guild.id} candidates=${JSON.stringify(wakeCandidates.map((candidate) => candidate.text))}`,
           );
-          acknowledgeWake(now);
+          acknowledgeWake(now, Number(metadata.sequence ?? 0));
           return;
         }
       }
