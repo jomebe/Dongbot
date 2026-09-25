@@ -35,6 +35,7 @@ import {
   discordToken,
   neisApiKey,
   nvidiaApiKey,
+  nvidiaLlmModel,
   nvidiaAsrFallbackFunctionId,
   nvidiaAsrFunctionId,
   nvidiaAsrServer,
@@ -196,6 +197,38 @@ const VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME = "끄기";
 const STT_TEST_COMMAND_NAME = "stt테스트";
 const STT_TEST_TIMEOUT_MS = 45_000;
 const VOICE_RECEIVE_SETTLE_MS = 2_000;
+const VOICE_LLM_TIMEOUT_MS = 10_000;
+const VOICE_LLM_MAX_HISTORY_MESSAGES = 6;
+const VOICE_LLM_MAX_REPLY_CHARS = 220;
+const VOICE_COMMAND_SPEECH_PHRASES = [
+  "방 이름",
+  "방이름",
+  "게임방",
+  "발로란트",
+  "으로 바꿔",
+  "로 바꿔",
+  "방 인원",
+  "오늘 급식",
+  "내일 급식",
+  "오늘 시간표",
+  "내일 시간표",
+  "티티에스 켜",
+  "티티에스 꺼",
+  "뭐야",
+  "무엇",
+  "왜",
+  "어디",
+  "언제",
+  "누구",
+  "어떻게",
+  "몇",
+  "알려줘",
+  "설명해줘",
+  "더하기",
+  "빼기",
+  "곱하기",
+  "나누기",
+];
 const TTS_COMMAND_NAME = "tts";
 const TTS_TEST_COMMAND_NAME = "ttstest";
 const SETUP_COMMAND_NAME = "초기설정";
@@ -339,6 +372,7 @@ const ttsLanguageAliasToVoice = new Map([
 ]);
 
 const ttsRuntimeByGuild = new Map();
+const voiceLlmHistoryByUser = new Map();
 const voiceAssistantRuntimeByGuild = new Map();
 const voiceAssistantTargetUserByGuild = new Map();
 const sttTestGuilds = new Set();
@@ -4815,6 +4849,112 @@ async function handleVoiceAssistantVoiceState(oldState, newState) {
   await startVoiceAssistantRuntime(newState.guild, targetUserId, voiceChannel);
 }
 
+function looksLikeVoiceQuestion(rawText) {
+  const text = String(rawText ?? "").trim();
+
+  if (!text) {
+    return false;
+  }
+
+  if (
+    /^(?:감사합니다|고맙습니다|네|예|어|음|여보세요)[.!?\s]*$/u.test(text)
+  ) {
+    return false;
+  }
+
+  return (
+    /(?:뭐|무엇|왜|어디|언제|누구|어떻게|몇|얼마|알려\s*줘|설명\s*해\s*줘|추천\s*해\s*줘|뜻|맞아|인가|이야|야\?|니\?|냐\?|까\?)/u.test(text) ||
+    /\d+\s*(?:\+|-|×|x|\*|\/|÷)\s*\d+/iu.test(text) ||
+    /\d+\s*(?:더하기|빼기|곱하기|나누기)\s*\d+/u.test(text)
+  );
+}
+
+function sanitizeVoiceLlmReply(value) {
+  return String(value ?? "")
+    .replace(/[*_#`]+/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, VOICE_LLM_MAX_REPLY_CHARS);
+}
+
+async function askVoiceLlm({ guildId, userId, question }) {
+  if (!nvidiaApiKey) {
+    throw new Error("LLM API 키가 설정되지 않았어요.");
+  }
+
+  const historyKey = `${guildId}:${userId}`;
+  const history = voiceLlmHistoryByUser.get(historyKey) ?? [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), VOICE_LLM_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      "https://integrate.api.nvidia.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${nvidiaApiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: nvidiaLlmModel,
+          messages: [
+            {
+              role: "system",
+              content:
+                "너는 디스코드 음성비서 동봇이다. 한국어로 자연스럽고 정확하게 답한다. 음성으로 읽기 때문에 마크다운, 표, 이모지는 쓰지 않는다. 간단한 질문은 한두 문장으로 짧게 답한다. 모르면 아는 척하지 말고 모른다고 말한다.",
+            },
+            ...history,
+            {
+              role: "user",
+              content: question,
+            },
+          ],
+          max_tokens: 160,
+          temperature: 0.2,
+          stream: false,
+        }),
+      },
+    );
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(
+        payload?.detail ??
+          payload?.message ??
+          `LLM 요청 실패 HTTP ${response.status}`,
+      );
+    }
+
+    const reply = sanitizeVoiceLlmReply(
+      payload?.choices?.[0]?.message?.content,
+    );
+
+    if (!reply) {
+      throw new Error("LLM이 빈 답변을 반환했어요.");
+    }
+
+    const nextHistory = [
+      ...history,
+      { role: "user", content: question },
+      { role: "assistant", content: reply },
+    ].slice(-VOICE_LLM_MAX_HISTORY_MESSAGES);
+
+    voiceLlmHistoryByUser.set(historyKey, nextHistory);
+    return reply;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("질문 답변이 너무 오래 걸렸어요. 다시 물어봐 줘.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
   if (!nvidiaAsrClient) {
     throw new Error("NVIDIA ASR client is not configured");
@@ -4958,7 +5098,17 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       let primaryError = null;
 
       try {
-        primaryList = asList(await nvidiaAsrClient.transcribePcm(pcmBuffer));
+        primaryList = asList(
+          await nvidiaAsrClient.transcribePcm(
+            pcmBuffer,
+            wakeSession.isAwaitingCommand()
+              ? {
+                  speechPhrases: VOICE_COMMAND_SPEECH_PHRASES,
+                  speechBoost: 45,
+                }
+              : undefined,
+          ),
+        );
       } catch (error) {
         primaryError = error;
         console.warn(
@@ -5164,10 +5314,24 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
             return;
           }
 
-          console.log(
-            `[voice-assistant] follow-up ignored guild=${guild.id} candidates=${JSON.stringify(transcriptList)}`,
-          );
-          return;
+          const questionCandidate = candidates.find((candidate) => {
+            const questionText =
+              candidate.wake?.commandText || candidate.text;
+            return looksLikeVoiceQuestion(questionText);
+          });
+
+          if (questionCandidate) {
+            const question =
+              questionCandidate.wake?.commandText || questionCandidate.text;
+            wakeSession.consume(questionCandidate.text, now);
+            command = { type: "ask", question };
+            commandText = question;
+          } else {
+            console.log(
+              `[voice-assistant] follow-up ignored guild=${guild.id} candidates=${JSON.stringify(transcriptList)}`,
+            );
+            return;
+          }
         }
       } else {
         const wakeCandidates = transcriptList
@@ -5199,11 +5363,26 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           command = actionable.command;
           commandText = actionable.wake.commandText;
         } else {
-          console.log(
-            `[voice-assistant] wake accepted guild=${guild.id} candidates=${JSON.stringify(wakeCandidates.map((candidate) => candidate.text))}`,
+          const questionCandidate = wakeCandidates.find(
+            (candidate) =>
+              candidate.wake.commandText &&
+              looksLikeVoiceQuestion(candidate.wake.commandText),
           );
-          acknowledgeWake(now, Number(metadata.sequence ?? 0));
-          return;
+
+          if (questionCandidate) {
+            wakeSession.consume(questionCandidate.text, now);
+            command = {
+              type: "ask",
+              question: questionCandidate.wake.commandText,
+            };
+            commandText = questionCandidate.wake.commandText;
+          } else {
+            console.log(
+              `[voice-assistant] wake accepted guild=${guild.id} candidates=${JSON.stringify(wakeCandidates.map((candidate) => candidate.text))}`,
+            );
+            acknowledgeWake(now, Number(metadata.sequence ?? 0));
+            return;
+          }
         }
       }
 
@@ -5303,6 +5482,14 @@ async function getManagedVoiceRoomForUser(guild, userId) {
 }
 
 async function executeVoiceAssistantCommand({ guild, userId, command }) {
+  if (command.type === "ask") {
+    return askVoiceLlm({
+      guildId: guild.id,
+      userId,
+      question: command.question,
+    });
+  }
+
   if (command.type === "help") {
     return "방 이름 변경, 방 인원 변경, 티티에스 켜기와 끄기, 급식, 시간표, 나가기를 말할 수 있어요.";
   }
