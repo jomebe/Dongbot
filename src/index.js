@@ -35,7 +35,6 @@ import {
   discordToken,
   neisApiKey,
   nvidiaApiKey,
-  nvidiaLlmModel,
   nvidiaAsrFallbackFunctionId,
   nvidiaAsrFunctionId,
   nvidiaAsrServer,
@@ -44,6 +43,9 @@ import {
   voiceAssistantWakeWord,
   voiceAssistantDefaultSchoolName,
   voiceAssistantDefaultEducationOfficeName,
+  voiceLlmApiKey,
+  voiceLlmBaseUrl,
+  voiceLlmModel,
 } from "./config.js";
 import {
   addManagedChannel,
@@ -197,9 +199,9 @@ const VOICE_ASSISTANT_DISABLE_SUBCOMMAND_NAME = "끄기";
 const STT_TEST_COMMAND_NAME = "stt테스트";
 const STT_TEST_TIMEOUT_MS = 45_000;
 const VOICE_RECEIVE_SETTLE_MS = 2_000;
-const VOICE_LLM_TIMEOUT_MS = 10_000;
-const VOICE_LLM_MAX_HISTORY_MESSAGES = 6;
-const VOICE_LLM_MAX_REPLY_CHARS = 220;
+const VOICE_LLM_TIMEOUT_MS = 12_000;
+const VOICE_LLM_MAX_HISTORY_MESSAGES = 4;
+const VOICE_LLM_MAX_REPLY_CHARS = 180;
 const VOICE_COMMAND_SPEECH_PHRASES = [
   "방 이름",
   "방이름",
@@ -4878,27 +4880,28 @@ function sanitizeVoiceLlmReply(value) {
 }
 
 async function askVoiceLlm({ guildId, userId, question }) {
-  if (!nvidiaApiKey) {
-    throw new Error("LLM API 키가 설정되지 않았어요.");
-  }
-
   const historyKey = `${guildId}:${userId}`;
   const history = voiceLlmHistoryByUser.get(historyKey) ?? [];
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VOICE_LLM_TIMEOUT_MS);
 
   try {
+    const headers = {
+      "Content-Type": "application/json",
+    };
+
+    if (voiceLlmApiKey) {
+      headers.Authorization = `Bearer ${voiceLlmApiKey}`;
+    }
+
     const response = await fetch(
-      "https://integrate.api.nvidia.com/v1/chat/completions",
+      `${voiceLlmBaseUrl.replace(/\/$/u, "")}/chat/completions`,
       {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${nvidiaApiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers,
         signal: controller.signal,
         body: JSON.stringify({
-          model: nvidiaLlmModel,
+          model: voiceLlmModel,
           messages: [
             {
               role: "system",
@@ -4911,7 +4914,7 @@ async function askVoiceLlm({ guildId, userId, question }) {
               content: question,
             },
           ],
-          max_tokens: 160,
+          max_tokens: 96,
           temperature: 0.2,
           stream: false,
         }),
