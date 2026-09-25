@@ -41,6 +41,8 @@ import {
   roomGeneratorChannelName,
   roomPrefix,
   voiceAssistantWakeWord,
+  voiceAssistantDefaultSchoolName,
+  voiceAssistantDefaultEducationOfficeName,
 } from "./config.js";
 import {
   addManagedChannel,
@@ -2541,11 +2543,15 @@ async function resolveSchoolLookupInput({
       ? educationOfficeNameInput.trim()
       : "";
 
-  const schoolName = providedSchoolName || savedConfig.schoolName || "";
+  const schoolName =
+    providedSchoolName ||
+    savedConfig.schoolName ||
+    voiceAssistantDefaultSchoolName ||
+    "";
 
   if (!schoolName) {
     throw new Error(
-      "기본 학교가 설정되지 않았어요. 먼저 /학교에서 학교명을 설정하거나 명령어에 학교명을 입력해 주세요.",
+      "기본 학교가 설정되지 않았어요. 먼저 /학교에서 학교명을 설정하거나 서버 환경변수에 기본 학교를 설정해 주세요.",
     );
   }
 
@@ -2553,7 +2559,9 @@ async function resolveSchoolLookupInput({
     ? providedOfficeName
     : providedSchoolName
       ? null
-      : savedConfig.educationOfficeName;
+      : savedConfig.educationOfficeName ||
+        voiceAssistantDefaultEducationOfficeName ||
+        null;
 
   return {
     schoolName,
@@ -5130,11 +5138,15 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         }
       } catch (error) {
         console.error(`음성 명령 실행 실패 (guild=${guild.id})`, error);
+        const errorMessage =
+          error instanceof Error && error.message
+            ? error.message
+            : "명령을 실행하는 중 오류가 발생했어요.";
         enqueueTtsPlayback(
           guild,
           voiceChannel,
           "ko-KR-SunHiNeural",
-          "명령을 실행하는 중 오류가 발생했어요.",
+          errorMessage,
         );
       }
     },
@@ -5177,16 +5189,28 @@ async function getManagedVoiceRoomForUser(guild, userId) {
   const voiceChannel = member.voice.channel;
 
   if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-    throw new Error("먼저 음성 수다방에 들어가 주세요.");
+    throw new Error("먼저 음성방에 들어가 주세요.");
+  }
+
+  const runtime = voiceAssistantRuntimeByGuild.get(guild.id);
+
+  if (!runtime || runtime.userId !== userId || runtime.channelId !== voiceChannel.id) {
+    throw new Error("음성비서가 같이 들어가 있는 현재 음성방에서만 바꿀 수 있어요.");
   }
 
   const config = await getGuildConfig(guild.id);
 
-  if (
-    voiceChannel.id === config.generatorChannelId ||
-    !config.managedChannelIds.includes(voiceChannel.id)
-  ) {
-    throw new Error("동봇이 만든 음성 수다방에서만 바꿀 수 있어요.");
+  if (voiceChannel.id === config.generatorChannelId) {
+    throw new Error("방 생성 채널 자체는 변경할 수 없어요.");
+  }
+
+  const me = guild.members.me ?? (await guild.members.fetchMe());
+  const canManageChannel = voiceChannel
+    .permissionsFor(me)
+    ?.has(PermissionFlagsBits.ManageChannels);
+
+  if (!canManageChannel) {
+    throw new Error("동봇에게 이 음성방의 채널 관리 권한이 필요해요.");
   }
 
   return voiceChannel;
