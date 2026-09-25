@@ -115,11 +115,17 @@ export function parseVoiceCommand(rawTranscript) {
   return { type: "unknown" };
 }
 
-function buildWakePattern(wakeWord) {
+function buildWakePatterns(wakeWord) {
   if (wakeWord.replace(/\s+/gu, "") === "동봇") {
-    // Require the explicit "헤이" prefix. Short outputs such as "동" or
-    // "동봇" occur too often in normal conversation and caused false wakes.
-    return /(?:헤이|hey)\s*동\s*(?:봇|복|보(?:트)?|본)(?:아|이)?/iu;
+    return {
+      explicit:
+        /(?:헤이|hey)\s*동(?:\s*(?:봇|복|보(?:트)?|본|북|무|문))?(?:아|이)?/iu,
+      // These are the actual short-form errors produced by the current
+      // Parakeet model for this wake phrase. They are accepted only when the
+      // audio itself is a short utterance, never inside ordinary long speech.
+      shortAsr:
+        /^(?:a2?|э|р\s*э)\s*동(?:\s*(?:봇|복|보(?:트)?|본|북|무|문))?(?:아|이)?$/iu,
+    };
   }
 
   const escaped = wakeWord
@@ -127,28 +133,52 @@ function buildWakePattern(wakeWord) {
     .map((character) => character.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&"))
     .join("\\s*");
 
-  return new RegExp("(?:헤이|hey)\\s*" + escaped + "(?:아|이)?", "iu");
+  return {
+    explicit: new RegExp("(?:헤이|hey)\\s*" + escaped + "(?:아|이)?", "iu"),
+    shortAsr: null,
+  };
 }
 
 export class WakeWordSession {
   constructor({ wakeWord = "동봇", followUpWindowMs = 8_000 } = {}) {
-    this.wakePattern = buildWakePattern(wakeWord);
+    const wakePatterns = buildWakePatterns(wakeWord);
+    this.wakePattern = wakePatterns.explicit;
+    this.shortWakePattern = wakePatterns.shortAsr;
     this.followUpWindowMs = followUpWindowMs;
     this.awaitingCommandUntil = 0;
   }
 
-  matchesWakeWord(rawTranscript) {
-    return this.wakePattern.test(normalizeTranscript(rawTranscript));
+  getWakeMatch(rawTranscript, { shortUtterance = false } = {}) {
+    const transcript = normalizeTranscript(rawTranscript);
+    const explicitMatch = transcript.match(this.wakePattern);
+
+    if (explicitMatch) {
+      return { transcript, match: explicitMatch };
+    }
+
+    if (shortUtterance && this.shortWakePattern) {
+      const shortMatch = transcript.match(this.shortWakePattern);
+
+      if (shortMatch) {
+        return { transcript, match: shortMatch };
+      }
+    }
+
+    return null;
   }
 
-  inspectWakeWord(rawTranscript) {
-    const transcript = normalizeTranscript(rawTranscript);
-    const wakeMatch = transcript.match(this.wakePattern);
+  matchesWakeWord(rawTranscript, options = {}) {
+    return Boolean(this.getWakeMatch(rawTranscript, options));
+  }
 
-    if (!wakeMatch) {
+  inspectWakeWord(rawTranscript, options = {}) {
+    const wakeMatchResult = this.getWakeMatch(rawTranscript, options);
+
+    if (!wakeMatchResult) {
       return null;
     }
 
+    const { transcript, match: wakeMatch } = wakeMatchResult;
     let commandText = transcript
       .slice((wakeMatch.index ?? 0) + wakeMatch[0].length)
       .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
@@ -156,7 +186,8 @@ export class WakeWordSession {
 
     // Repeating only the wake phrase is still a wake, not a command.
     while (commandText) {
-      const repeatedWake = commandText.match(this.wakePattern);
+      const repeatedWakeResult = this.getWakeMatch(commandText, options);
+      const repeatedWake = repeatedWakeResult?.match;
 
       if (!repeatedWake || (repeatedWake.index ?? 0) !== 0) {
         break;
