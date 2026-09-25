@@ -4843,6 +4843,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
     userId,
     lastWakeAckAt: 0,
     lastWakeSequence: 0,
+    wakeFragments: new Map(),
   };
 
   const acknowledgeWake = (now = Date.now(), sequence = 0) => {
@@ -4852,7 +4853,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       runtime.lastWakeSequence = Math.max(runtime.lastWakeSequence, sequence);
     }
 
-    if (now - runtime.lastWakeAckAt < 2_000) {
+    if (now - runtime.lastWakeAckAt < 800) {
       console.log(
         `[voice-assistant] duplicate wake ack suppressed guild=${guild.id}`,
       );
@@ -4866,6 +4867,81 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       "ko-KR-SunHiNeural",
       "네.",
     );
+  };
+
+  const normalizeWakeFragment = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[,.!?~]+/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+
+  const isWakePreludeFragment = (value) =>
+    /^(?:헤|헤이|hey)$/iu.test(normalizeWakeFragment(value));
+
+  const isWakeTailFragment = (value) =>
+    /^(?:동|동봇|동복|동북|동보(?:트)?|동본|동무|동문|(?:a2?|э|х|р\s*э)\s*[.\s]*동(?:\s*(?:봇|복|보(?:트)?|본|북|무|문))?)$/iu.test(
+      normalizeWakeFragment(value),
+    );
+
+  const maybeAcceptFragmentedWake = (transcriptList, metadata, now) => {
+    const sequence = Number(metadata.sequence ?? 0);
+
+    if (sequence <= 0) {
+      return false;
+    }
+
+    runtime.wakeFragments.set(sequence, {
+      sequence,
+      transcripts: transcriptList,
+      capturedAt: Number(metadata.capturedAt ?? 0),
+      finalizedAt: Number(metadata.finalizedAt ?? 0),
+      receivedAt: now,
+    });
+
+    for (const [storedSequence, fragment] of runtime.wakeFragments) {
+      if (
+        Math.abs(storedSequence - sequence) > 3 ||
+        now - fragment.receivedAt > 6_000
+      ) {
+        runtime.wakeFragments.delete(storedSequence);
+      }
+    }
+
+    const pairs = [
+      [runtime.wakeFragments.get(sequence - 1), runtime.wakeFragments.get(sequence)],
+      [runtime.wakeFragments.get(sequence), runtime.wakeFragments.get(sequence + 1)],
+    ];
+
+    for (const [first, second] of pairs) {
+      if (!first || !second) {
+        continue;
+      }
+
+      const hasPrelude = first.transcripts.some(isWakePreludeFragment);
+      const hasTail = second.transcripts.some(isWakeTailFragment);
+
+      if (!hasPrelude || !hasTail) {
+        continue;
+      }
+
+      const startAt = first.capturedAt || first.receivedAt;
+      const endAt = second.finalizedAt || second.receivedAt;
+
+      if (endAt - startAt > 6_000) {
+        continue;
+      }
+
+      runtime.wakeFragments.clear();
+      console.log(
+        `[voice-assistant] fragmented wake accepted guild=${guild.id} seq=${first.sequence}+${second.sequence} first=${JSON.stringify(first.transcripts)} second=${JSON.stringify(second.transcripts)}`,
+      );
+      acknowledgeWake(now, Math.max(first.sequence, second.sequence));
+      return true;
+    }
+
+    return false;
   };
 
   runtime.stopListening = captureUserUtterances({
@@ -4896,7 +4972,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           ? Math.max(0, metadata.finalizedAt - metadata.capturedAt)
           : 0;
       const shortUtterance =
-        utteranceDurationMs > 0 && utteranceDurationMs <= 2_200;
+        utteranceDurationMs > 0 && utteranceDurationMs <= 3_500;
 
       const primaryHasWake = primaryList.some((value) =>
         wakeSession.matchesWakeWord(value, { shortUtterance }),
@@ -4925,7 +5001,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       const likelyWakeHint =
         shortUtterance &&
         primaryList.some((value) =>
-          /(?:헤이|hey|^\s*a2?\s*동|^\s*э\s*동|^\s*р\s*э\s*동)/iu.test(value),
+          /(?:헤이|hey|^\s*헤\s*$|^\s*동\s*$|^\s*a2?\s*동|^\s*э\s*[.\s]*동|^\s*х\s*[.\s]*동|^\s*р\s*э\s*[.\s]*동)/iu.test(value),
         );
 
       const needsCommandFallback =
@@ -4975,22 +5051,12 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       const resultAgeMs = metadata.finalizedAt
         ? Date.now() - metadata.finalizedAt
         : 0;
-
-      const staleLimitMs = wakeSession.isAwaitingCommand() ? 4_500 : 1_800;
-
-      if (resultAgeMs > staleLimitMs) {
-        console.log(
-          `[voice-assistant] stale ASR dropped guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} limitMs=${staleLimitMs}`,
-        );
-        return;
-      }
-
       const utteranceDurationMs =
         metadata.capturedAt && metadata.finalizedAt
           ? Math.max(0, metadata.finalizedAt - metadata.capturedAt)
           : 0;
       const shortUtterance =
-        utteranceDurationMs > 0 && utteranceDurationMs <= 2_200;
+        utteranceDurationMs > 0 && utteranceDurationMs <= 3_500;
 
       const transcriptList = (Array.isArray(transcripts) ? transcripts : [transcripts])
         .map((value) => String(value ?? "").trim())
@@ -5001,11 +5067,34 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         return;
       }
 
+      const potentialWake = transcriptList.some(
+        (value) =>
+          wakeSession.matchesWakeWord(value, { shortUtterance }) ||
+          isWakePreludeFragment(value) ||
+          isWakeTailFragment(value),
+      );
+      const staleLimitMs = wakeSession.isAwaitingCommand()
+        ? 4_500
+        : potentialWake
+          ? 3_200
+          : 1_800;
+
+      if (resultAgeMs > staleLimitMs) {
+        console.log(
+          `[voice-assistant] stale ASR dropped guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} limitMs=${staleLimitMs}`,
+        );
+        return;
+      }
+
       console.log(
         `[voice-assistant] STT guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} durationMs=${utteranceDurationMs} candidates=${JSON.stringify(transcriptList)}`,
       );
 
       const now = Date.now();
+
+      if (maybeAcceptFragmentedWake(transcriptList, metadata, now)) {
+        return;
+      }
       let command = null;
       let commandText = null;
 
