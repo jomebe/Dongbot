@@ -32,6 +32,10 @@ export const nvidiaAsrFallbackFunctionId =
   "b702f636-f60c-4a3d-a6f4-f3568c13bd7d";
 export const voiceAssistantWakeWord =
   process.env.VOICE_ASSISTANT_WAKE_WORD ?? "동봇";
+export const voiceAssistantDefaultSchoolName =
+  process.env.VOICE_ASSISTANT_DEFAULT_SCHOOL ?? null;
+export const voiceAssistantDefaultEducationOfficeName =
+  process.env.VOICE_ASSISTANT_DEFAULT_EDUCATION_OFFICE ?? null;
 
 const firebaseApiKey = getRequiredEnv("FIREBASE_API_KEY");
 const firebaseAuthDomain = getRequiredEnv("FIREBASE_AUTH_DOMAIN");
