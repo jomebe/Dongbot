@@ -17,7 +17,8 @@ const BYTES_PER_SAMPLE = 2;
 const MAX_UTTERANCE_MS = 15_000;
 const END_SILENCE_MS = 280;
 const MIN_PCM_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 0.12;
-const MAX_PENDING_UTTERANCES = 2;
+const MAX_CONCURRENT_TRANSCRIPTIONS = 2;
+const MAX_PENDING_UTTERANCES = 1;
 const MAX_STEREO_PCM_BYTES =
   SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * (MAX_UTTERANCE_MS / 1000);
 
@@ -83,7 +84,7 @@ export function captureUserUtterances({
   let maxUtteranceTimeout = null;
   let restartTimeout = null;
   let sequence = 0;
-  let transcriptionRunning = false;
+  let activeTranscriptions = 0;
   const pendingTranscriptions = [];
 
   const handleSpeakingStart = (speakingUserId) => {
@@ -106,35 +107,40 @@ export function captureUserUtterances({
     }
   };
 
-  const drainTranscriptions = async () => {
-    if (transcriptionRunning || stopped) {
+  const runTranscription = async (item) => {
+    activeTranscriptions += 1;
+
+    try {
+      const transcript = await transcribe(item.monoPcm, item.metadata);
+
+      if (
+        !stopped &&
+        ((Array.isArray(transcript) && transcript.some(Boolean)) ||
+          (!Array.isArray(transcript) && transcript))
+      ) {
+        await onTranscript(transcript, item.metadata);
+      }
+    } catch (error) {
+      onError(error);
+    } finally {
+      activeTranscriptions -= 1;
+      drainTranscriptions();
+    }
+  };
+
+  const drainTranscriptions = () => {
+    if (stopped) {
       return;
     }
 
-    transcriptionRunning = true;
+    while (
+      activeTranscriptions < MAX_CONCURRENT_TRANSCRIPTIONS &&
+      pendingTranscriptions.length > 0
+    ) {
+      const item = pendingTranscriptions.pop();
 
-    try {
-      while (!stopped && pendingTranscriptions.length > 0) {
-        const item = pendingTranscriptions.shift();
-
-        try {
-          const transcript = await transcribe(item.monoPcm, item.metadata);
-
-          if (
-            (Array.isArray(transcript) && transcript.some(Boolean)) ||
-            (!Array.isArray(transcript) && transcript)
-          ) {
-            await onTranscript(transcript, item.metadata);
-          }
-        } catch (error) {
-          onError(error);
-        }
-      }
-    } finally {
-      transcriptionRunning = false;
-
-      if (!stopped && pendingTranscriptions.length > 0) {
-        void drainTranscriptions();
+      if (item) {
+        void runTranscription(item);
       }
     }
   };
