@@ -32,7 +32,13 @@ export function createNvidiaAsrClient({
   );
 
   return {
-    async transcribePcm(pcmBuffer) {
+    async transcribePcm(
+      pcmBuffer,
+      {
+        speechPhrases = null,
+        speechBoost = null,
+      } = {},
+    ) {
       if (!Buffer.isBuffer(pcmBuffer) || pcmBuffer.length === 0) {
         return "";
       }
@@ -47,16 +53,27 @@ export function createNvidiaAsrClient({
           sampleRateHertz: 48_000,
           languageCode,
           maxAlternatives,
-          ...(enableWakeWordBoost
-            ? {
-                speechContexts: [
-                  {
-                    phrases: [wakeWord, `헤이 ${wakeWord}`, `헤이${wakeWord}`],
-                    boost: 80,
-                  },
-                ],
-              }
-            : {}),
+          ...(
+            Array.isArray(speechPhrases) && speechPhrases.length > 0
+              ? {
+                  speechContexts: [
+                    {
+                      phrases: speechPhrases,
+                      boost: speechBoost ?? 80,
+                    },
+                  ],
+                }
+              : enableWakeWordBoost
+                ? {
+                    speechContexts: [
+                      {
+                        phrases: [wakeWord, `헤이 ${wakeWord}`, `헤이${wakeWord}`],
+                        boost: 80,
+                      },
+                    ],
+                  }
+                : {}
+          ),
           audioChannelCount: 1,
           enableAutomaticPunctuation: true,
         },
