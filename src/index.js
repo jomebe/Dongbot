@@ -4851,6 +4851,110 @@ async function handleVoiceAssistantVoiceState(oldState, newState) {
   await startVoiceAssistantRuntime(newState.guild, targetUserId, voiceChannel);
 }
 
+function normalizeSimpleNumberToken(rawToken) {
+  const token = String(rawToken ?? "").trim().replace(/[가은는이가을를]/gu, "");
+  const digit = Number(token);
+
+  if (Number.isFinite(digit)) {
+    return digit;
+  }
+
+  const koreanNumbers = new Map([
+    ["영", 0],
+    ["공", 0],
+    ["일", 1],
+    ["하나", 1],
+    ["한", 1],
+    ["이", 2],
+    ["둘", 2],
+    ["두", 2],
+    ["삼", 3],
+    ["셋", 3],
+    ["세", 3],
+    ["사", 4],
+    ["넷", 4],
+    ["네", 4],
+    ["오", 5],
+    ["다섯", 5],
+    ["육", 6],
+    ["여섯", 6],
+    ["칠", 7],
+    ["일곱", 7],
+    ["팔", 8],
+    ["여덟", 8],
+    ["구", 9],
+    ["아홉", 9],
+    ["십", 10],
+    ["열", 10],
+  ]);
+
+  return koreanNumbers.get(token) ?? null;
+}
+
+function tryEvaluateSimpleVoiceMath(rawText) {
+  const text = String(rawText ?? "")
+    .toLowerCase()
+    .replace(/엑스/gu, "x")
+    .replace(/곱하기|곱해|곱/gu, "*")
+    .replace(/더하기|더해/gu, "+")
+    .replace(/빼기|빼/gu, "-")
+    .replace(/나누기|나눠/gu, "/")
+    .replace(/[×✕]/gu, "*")
+    .replace(/÷/gu, "/");
+
+  const match = text.match(
+    /([0-9]+(?:\.[0-9]+)?|영|공|일|하나|한|이|둘|두|삼|셋|세|사|넷|네|오|다섯|육|여섯|칠|일곱|팔|여덟|구|아홉|십|열)\s*([+\-*/x])\s*([0-9]+(?:\.[0-9]+)?|영|공|일|하나|한|이|둘|두|삼|셋|세|사|넷|네|오|다섯|육|여섯|칠|일곱|팔|여덟|구|아홉|십|열)/u,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const left = normalizeSimpleNumberToken(match[1]);
+  const right = normalizeSimpleNumberToken(match[3]);
+  const operator = match[2];
+
+  if (left === null || right === null) {
+    return null;
+  }
+
+  let result;
+
+  if (operator === "+" ) result = left + right;
+  else if (operator === "-") result = left - right;
+  else if (operator === "*" || operator === "x") result = left * right;
+  else if (operator === "/") {
+    if (right === 0) return "0으로는 나눌 수 없어.";
+    result = left / right;
+  } else {
+    return null;
+  }
+
+  const formatted = Number.isInteger(result)
+    ? String(result)
+    : String(Number(result.toFixed(6)));
+
+  return `${formatted}이야.`;
+}
+
+function scoreVoiceQuestionCandidate(rawText) {
+  const text = String(rawText ?? "").trim();
+
+  if (!looksLikeVoiceQuestion(text)) {
+    return -Infinity;
+  }
+
+  let score = 0;
+
+  if (tryEvaluateSimpleVoiceMath(text)) score += 100;
+  if (/\d/u.test(text)) score += 10;
+  if (/(?:곱하기|더하기|빼기|나누기|[+\-*/×÷])/u.test(text)) score += 10;
+  if (/(?:뭐|무엇|왜|어디|언제|누구|어떻게|몇|얼마)/u.test(text)) score += 3;
+  if (/(?:방 이름|게임방|방 인원)/u.test(text)) score -= 4;
+
+  return score;
+}
+
 function looksLikeVoiceQuestion(rawText) {
   const text = String(rawText ?? "").trim();
 
@@ -4880,6 +4984,12 @@ function sanitizeVoiceLlmReply(value) {
 }
 
 async function askVoiceLlm({ guildId, userId, question }) {
+  const directMathReply = tryEvaluateSimpleVoiceMath(question);
+
+  if (directMathReply) {
+    return directMathReply;
+  }
+
   const historyKey = `${guildId}:${userId}`;
   const history = voiceLlmHistoryByUser.get(historyKey) ?? [];
   const controller = new AbortController();
@@ -5178,7 +5288,11 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         const fallbackList = asList(
           await nvidiaAsrFallbackClient.transcribePcm(pcmBuffer),
         );
-        return [...primaryList, ...fallbackList].filter(
+        const mergedCandidates = needsCommandFallback
+          ? [...fallbackList, ...primaryList]
+          : [...primaryList, ...fallbackList];
+
+        return mergedCandidates.filter(
           (value, index, values) => values.indexOf(value) === index,
         );
       } catch (error) {
@@ -5317,15 +5431,21 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
             return;
           }
 
-          const questionCandidate = candidates.find((candidate) => {
-            const questionText =
-              candidate.wake?.commandText || candidate.text;
-            return looksLikeVoiceQuestion(questionText);
-          });
+          const questionCandidate = candidates
+            .map((candidate) => {
+              const questionText =
+                candidate.wake?.commandText || candidate.text;
+              return {
+                ...candidate,
+                questionText,
+                questionScore: scoreVoiceQuestionCandidate(questionText),
+              };
+            })
+            .filter((candidate) => Number.isFinite(candidate.questionScore))
+            .sort((left, right) => right.questionScore - left.questionScore)[0];
 
           if (questionCandidate) {
-            const question =
-              questionCandidate.wake?.commandText || questionCandidate.text;
+            const question = questionCandidate.questionText;
             wakeSession.consume(questionCandidate.text, now);
             command = { type: "ask", question };
             commandText = question;
@@ -5366,11 +5486,16 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
           command = actionable.command;
           commandText = actionable.wake.commandText;
         } else {
-          const questionCandidate = wakeCandidates.find(
-            (candidate) =>
-              candidate.wake.commandText &&
-              looksLikeVoiceQuestion(candidate.wake.commandText),
-          );
+          const questionCandidate = wakeCandidates
+            .filter((candidate) => candidate.wake.commandText)
+            .map((candidate) => ({
+              ...candidate,
+              questionScore: scoreVoiceQuestionCandidate(
+                candidate.wake.commandText,
+              ),
+            }))
+            .filter((candidate) => Number.isFinite(candidate.questionScore))
+            .sort((left, right) => right.questionScore - left.questionScore)[0];
 
           if (questionCandidate) {
             wakeSession.consume(questionCandidate.text, now);
