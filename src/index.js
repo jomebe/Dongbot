@@ -5336,7 +5336,40 @@ async function executeVoiceAssistantCommand({ guild, userId, command }) {
   if (command.type === "room-name") {
     const voiceChannel = await getManagedVoiceRoomForUser(guild, userId);
     const nextName = command.name.slice(0, 100);
-    await voiceChannel.setName(nextName, `동봇 음성 명령 요청: ${userId}`);
+
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${voiceChannel.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bot ${discordToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: nextName }),
+      },
+    );
+    const responseBody = await response.json().catch(() => null);
+
+    if (response.status === 429) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(Number(responseBody?.retry_after ?? 1)),
+      );
+      const retryText =
+        retryAfterSeconds >= 60
+          ? `약 ${Math.ceil(retryAfterSeconds / 60)}분`
+          : `약 ${retryAfterSeconds}초`;
+
+      return `디스코드 채널 이름 변경 제한 중이야. ${retryText} 뒤에 다시 말해줘.`;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        responseBody?.message ??
+          `채널 이름 변경에 실패했어요. HTTP ${response.status}`,
+      );
+    }
+
     return `통화방 이름을 ${nextName}으로 바꿨어요.`;
   }
 
