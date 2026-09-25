@@ -45,6 +45,7 @@ import {
   voiceAssistantDefaultEducationOfficeName,
   voiceLlmApiKey,
   voiceLlmBaseUrl,
+  voiceLlmCloudModel,
   voiceLlmModel,
 } from "./config.js";
 import {
@@ -4983,54 +4984,31 @@ function sanitizeVoiceLlmReply(value) {
     .slice(0, VOICE_LLM_MAX_REPLY_CHARS);
 }
 
-async function askVoiceLlm({ guildId, userId, question }) {
-  const directMathReply = tryEvaluateSimpleVoiceMath(question);
-
-  if (directMathReply) {
-    return directMathReply;
-  }
-
-  const historyKey = `${guildId}:${userId}`;
-  const history = voiceLlmHistoryByUser.get(historyKey) ?? [];
+async function requestVoiceLlm({
+  url,
+  model,
+  headers,
+  messages,
+  timeoutMs,
+  providerName,
+}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), VOICE_LLM_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
 
   try {
-    const headers = {
-      "Content-Type": "application/json",
-    };
-
-    if (voiceLlmApiKey) {
-      headers.Authorization = `Bearer ${voiceLlmApiKey}`;
-    }
-
-    const response = await fetch(
-      `${voiceLlmBaseUrl.replace(/\/$/u, "")}/chat/completions`,
-      {
-        method: "POST",
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: voiceLlmModel,
-          messages: [
-            {
-              role: "system",
-              content:
-                "너는 디스코드 음성비서 동봇이다. 한국어로 자연스럽고 정확하게 답한다. 음성으로 읽기 때문에 마크다운, 표, 이모지는 쓰지 않는다. 간단한 질문은 한두 문장으로 짧게 답한다. 모르면 아는 척하지 말고 모른다고 말한다.",
-            },
-            ...history,
-            {
-              role: "user",
-              content: question,
-            },
-          ],
-          max_tokens: 96,
-          temperature: 0.2,
-          stream: false,
-        }),
-      },
-    );
-
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: 96,
+        temperature: 0.2,
+        stream: false,
+      }),
+    });
     const payload = await response.json().catch(() => null);
 
     if (!response.ok) {
@@ -5049,23 +5027,101 @@ async function askVoiceLlm({ guildId, userId, question }) {
       throw new Error("LLM이 빈 답변을 반환했어요.");
     }
 
-    const nextHistory = [
-      ...history,
-      { role: "user", content: question },
-      { role: "assistant", content: reply },
-    ].slice(-VOICE_LLM_MAX_HISTORY_MESSAGES);
-
-    voiceLlmHistoryByUser.set(historyKey, nextHistory);
+    console.log(
+      `[voice-assistant] LLM provider=${providerName} model=${model} latencyMs=${Date.now() - startedAt}`,
+    );
     return reply;
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error("질문 답변이 너무 오래 걸렸어요. 다시 물어봐 줘.");
-    }
-
-    throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function askVoiceLlm({ guildId, userId, question }) {
+  const directMathReply = tryEvaluateSimpleVoiceMath(question);
+
+  if (directMathReply) {
+    console.log(
+      `[voice-assistant] direct math question=${JSON.stringify(question)} reply=${JSON.stringify(directMathReply)}`,
+    );
+    return directMathReply;
+  }
+
+  const historyKey = `${guildId}:${userId}`;
+  const history = voiceLlmHistoryByUser.get(historyKey) ?? [];
+  const messages = [
+    {
+      role: "system",
+      content:
+        "너는 디스코드 음성비서 동봇이다. 한국어로 자연스럽고 정확하게 답한다. 음성으로 읽기 때문에 마크다운, 표, 이모지는 쓰지 않는다. 간단한 질문은 한두 문장으로 짧게 답한다. 모르면 아는 척하지 말고 모른다고 말한다.",
+    },
+    ...history,
+    {
+      role: "user",
+      content: question,
+    },
+  ];
+
+  const providers = [];
+
+  if (nvidiaApiKey) {
+    providers.push({
+      providerName: "nvidia",
+      url: "https://integrate.api.nvidia.com/v1/chat/completions",
+      model: voiceLlmCloudModel,
+      headers: {
+        Authorization: `Bearer ${nvidiaApiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeoutMs: 5_000,
+    });
+  }
+
+  const localHeaders = {
+    "Content-Type": "application/json",
+  };
+
+  if (voiceLlmApiKey) {
+    localHeaders.Authorization = `Bearer ${voiceLlmApiKey}`;
+  }
+
+  providers.push({
+    providerName: "local",
+    url: `${voiceLlmBaseUrl.replace(/\/$/u, "")}/chat/completions`,
+    model: voiceLlmModel,
+    headers: localHeaders,
+    timeoutMs: VOICE_LLM_TIMEOUT_MS,
+  });
+
+  let lastError = null;
+
+  for (const provider of providers) {
+    try {
+      const reply = await requestVoiceLlm({
+        ...provider,
+        messages,
+      });
+      const nextHistory = [
+        ...history,
+        { role: "user", content: question },
+        { role: "assistant", content: reply },
+      ].slice(-VOICE_LLM_MAX_HISTORY_MESSAGES);
+
+      voiceLlmHistoryByUser.set(historyKey, nextHistory);
+      return reply;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[voice-assistant] LLM provider failed provider=${provider.providerName} model=${provider.model}`,
+        error,
+      );
+    }
+  }
+
+  if (lastError?.name === "AbortError") {
+    throw new Error("질문 답변이 너무 오래 걸렸어요. 다시 물어봐 줘.");
+  }
+
+  throw lastError ?? new Error("질문 답변에 실패했어요.");
 }
 
 async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
