@@ -5239,9 +5239,6 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         );
       }
     },
-    onSpeechStart: () => {
-      interruptTtsPlayback(guild.id, "user-barge-in");
-    },
     onDebug: ({ decoder, decodedPackets, droppedPackets, pcmBytes, queueDepth, droppedPendingUtterance }) => {
       if (droppedPendingUtterance) {
         console.log(
