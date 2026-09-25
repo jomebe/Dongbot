@@ -71,6 +71,7 @@ test("실제 Parakeet 짧은 호출어 오인식을 짧은 발화에서만 허�
     "Э 동",
     "Э. 동",
     "Р. Э. 동",
+    "Х. 동",
   ];
 
   for (const phrase of observedVariants) {
