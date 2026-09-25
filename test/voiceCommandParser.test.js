@@ -125,6 +125,20 @@ test("통화방 이름과 인원 명령을 해석한다", () => {
 });
 
 
+test("명령어 문구 자체를 방 이름으로 바꾸지 않는다", () => {
+  assert.deepEqual(parseVoiceCommand("방이름 방 이름으로 바꿔"), {
+    type: "unknown",
+  });
+  assert.deepEqual(parseVoiceCommand("방 이름 게임방으로 바꿔"), {
+    type: "room-name",
+    name: "게임방",
+  });
+  assert.deepEqual(parseVoiceCommand("방 이름 발로란트로 바꿔"), {
+    type: "room-name",
+    name: "발로란트",
+  });
+});
+
 test("일반 대화의 이름 언급을 방 이름 변경으로 오인하지 않는다", () => {
   assert.deepEqual(parseVoiceCommand("형 이름 왜 범활이야"), {
     type: "unknown",
