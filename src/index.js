@@ -4968,9 +4968,11 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         ? Date.now() - metadata.finalizedAt
         : 0;
 
-      if (resultAgeMs > 1_800) {
+      const staleLimitMs = wakeSession.isAwaitingCommand() ? 4_500 : 1_800;
+
+      if (resultAgeMs > staleLimitMs) {
         console.log(
-          `[voice-assistant] stale ASR dropped guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs}`,
+          `[voice-assistant] stale ASR dropped guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} limitMs=${staleLimitMs}`,
         );
         return;
       }
