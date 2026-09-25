@@ -4883,24 +4883,52 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         );
       }
 
+      const utteranceDurationMs =
+        metadata.capturedAt && metadata.finalizedAt
+          ? Math.max(0, metadata.finalizedAt - metadata.capturedAt)
+          : 0;
+      const shortUtterance =
+        utteranceDurationMs > 0 && utteranceDurationMs <= 2_200;
+
       const primaryHasWake = primaryList.some((value) =>
-        wakeSession.matchesWakeWord(value),
+        wakeSession.matchesWakeWord(value, { shortUtterance }),
       );
 
-      if (primaryHasWake || wakeSession.isAwaitingCommand()) {
+      if (primaryHasWake) {
         console.log(
-          `[voice-assistant] fast ASR guild=${guild.id} seq=${metadata.sequence ?? "?"} source=parakeet`,
+          `[voice-assistant] fast ASR guild=${guild.id} seq=${metadata.sequence ?? "?"} source=parakeet wake=true durationMs=${utteranceDurationMs}`,
         );
         return primaryList;
       }
 
-      const likelyWakeHint = primaryList.some((value) =>
-        /(?:헤이|hey)/iu.test(value),
-      );
+      if (wakeSession.isAwaitingCommand()) {
+        const primaryHasCommand = primaryList.some(
+          (value) => parseVoiceCommand(value).type !== "unknown",
+        );
+
+        if (primaryHasCommand) {
+          console.log(
+            `[voice-assistant] fast ASR guild=${guild.id} seq=${metadata.sequence ?? "?"} source=parakeet command=true`,
+          );
+          return primaryList;
+        }
+      }
+
+      const likelyWakeHint =
+        shortUtterance &&
+        primaryList.some((value) =>
+          /(?:헤이|hey|^\s*a2?\s*동|^\s*э\s*동|^\s*р\s*э\s*동)/iu.test(value),
+        );
+
+      const needsCommandFallback =
+        wakeSession.isAwaitingCommand() &&
+        !primaryList.some(
+          (value) => parseVoiceCommand(value).type !== "unknown",
+        );
 
       if (
         !nvidiaAsrFallbackClient ||
-        (primaryList.length > 0 && !likelyWakeHint)
+        (primaryList.length > 0 && !likelyWakeHint && !needsCommandFallback)
       ) {
         if (primaryList.length === 0 && primaryError) {
           throw primaryError;
@@ -4947,6 +4975,13 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         return;
       }
 
+      const utteranceDurationMs =
+        metadata.capturedAt && metadata.finalizedAt
+          ? Math.max(0, metadata.finalizedAt - metadata.capturedAt)
+          : 0;
+      const shortUtterance =
+        utteranceDurationMs > 0 && utteranceDurationMs <= 2_200;
+
       const transcriptList = (Array.isArray(transcripts) ? transcripts : [transcripts])
         .map((value) => String(value ?? "").trim())
         .filter(Boolean)
@@ -4957,7 +4992,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
       }
 
       console.log(
-        `[voice-assistant] STT guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} candidates=${JSON.stringify(transcriptList)}`,
+        `[voice-assistant] STT guild=${guild.id} seq=${metadata.sequence ?? "?"} ageMs=${resultAgeMs} durationMs=${utteranceDurationMs} candidates=${JSON.stringify(transcriptList)}`,
       );
 
       const now = Date.now();
@@ -4979,7 +5014,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         }
 
         const candidates = transcriptList.map((text) => {
-          const wake = wakeSession.inspectWakeWord(text);
+          const wake = wakeSession.inspectWakeWord(text, { shortUtterance });
           const directCommand = parseVoiceCommand(text);
           const wakeCommand =
             wake?.commandText
@@ -5039,7 +5074,7 @@ async function startVoiceAssistantRuntime(guild, userId, voiceChannel) {
         const wakeCandidates = transcriptList
           .map((text) => ({
             text,
-            wake: wakeSession.inspectWakeWord(text),
+            wake: wakeSession.inspectWakeWord(text, { shortUtterance }),
           }))
           .filter((candidate) => candidate.wake);
 
