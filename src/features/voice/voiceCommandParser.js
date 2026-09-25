@@ -117,18 +117,17 @@ export function parseVoiceCommand(rawTranscript) {
 
 function buildWakePattern(wakeWord) {
   if (wakeWord.replace(/\s+/gu, "") === "동봇") {
-    // Korean ASR often hears the short wake phrase as "동보", "동복",
-    // "동보트" or splits it after "헤이". Keep this intentionally narrow
-    // enough to avoid waking on ordinary speech while accepting those errors.
-    return /(?:헤이\s*)?동\s*(?:봇|복|보(?:트|땅|탄|탕)?|포(?:당|탕)?|본|봄)(?:아|이)?/u;
+    // Require the explicit "헤이" prefix. Short outputs such as "동" or
+    // "동봇" occur too often in normal conversation and caused false wakes.
+    return /(?:헤이|hey)\s*동\s*(?:봇|복|보(?:트)?|본)(?:아|이)?/iu;
   }
 
   const escaped = wakeWord
     .split("")
-    .map((character) => character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .map((character) => character.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&"))
     .join("\\s*");
 
-  return new RegExp(`${escaped}(?:아|이)?`, "u");
+  return new RegExp("(?:헤이|hey)\\s*" + escaped + "(?:아|이)?", "iu");
 }
 
 export class WakeWordSession {
@@ -150,10 +149,24 @@ export class WakeWordSession {
       return null;
     }
 
-    const commandText = transcript
+    let commandText = transcript
       .slice((wakeMatch.index ?? 0) + wakeMatch[0].length)
       .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
       .trim();
+
+    // Repeating only the wake phrase is still a wake, not a command.
+    while (commandText) {
+      const repeatedWake = commandText.match(this.wakePattern);
+
+      if (!repeatedWake || (repeatedWake.index ?? 0) !== 0) {
+        break;
+      }
+
+      commandText = commandText
+        .slice(repeatedWake[0].length)
+        .replace(/^\s*(?:야|아|이|,)?\s*/u, "")
+        .trim();
+    }
 
     return {
       awakened: true,
