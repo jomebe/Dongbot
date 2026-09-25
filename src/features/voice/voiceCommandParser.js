@@ -124,7 +124,7 @@ function buildWakePatterns(wakeWord) {
       // Parakeet model for this wake phrase. They are accepted only when the
       // audio itself is a short utterance, never inside ordinary long speech.
       shortAsr:
-        /^(?:a2?|э|р\s*э)\s*동(?:\s*(?:봇|복|보(?:트)?|본|북|무|문))?(?:아|이)?$/iu,
+        /^(?:a2?|э|х|р\s*э)\s*[.\s]*동(?:\s*(?:봇|복|보(?:트)?|본|북|무|문))?(?:아|이)?$/iu,
     };
   }
 
