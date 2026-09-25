@@ -10,6 +10,7 @@ import {
   joinVoiceChannel,
 } from "@discordjs/voice";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { spawn } from "node:child_process";
 import {
   ActionRowBuilder,
   AuditLogEvent,
@@ -4984,6 +4985,105 @@ function sanitizeVoiceLlmReply(value) {
     .slice(0, VOICE_LLM_MAX_REPLY_CHARS);
 }
 
+function requestNvidiaVoiceLlmWithCurl({
+  model,
+  messages,
+  timeoutMs,
+}) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model,
+      messages,
+      max_tokens: 96,
+      temperature: 0.2,
+      stream: false,
+    });
+    const maxTimeSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
+    const child = spawn(
+      "curl",
+      [
+        "--http2",
+        "-sS",
+        "--max-time",
+        String(maxTimeSeconds),
+        "--config",
+        "-",
+        "-H",
+        "Content-Type: application/json",
+        "-w",
+        "\\n__HTTP_STATUS__:%{http_code}",
+        "-d",
+        payload,
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeoutMs + 1_000);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+
+      const markerText = "\n__HTTP_STATUS__:";
+      const markerIndex = stdout.lastIndexOf(markerText);
+
+      if (markerIndex < 0) {
+        reject(
+          new Error(
+            stderr.trim() ||
+              `NVIDIA LLM curl failed with exit code ${code}`,
+          ),
+        );
+        return;
+      }
+
+      const bodyText = stdout.slice(0, markerIndex);
+      const status = Number(
+        stdout.slice(markerIndex + markerText.length).trim(),
+      );
+      const body = JSON.parse(bodyText || "null");
+
+      if (!Number.isFinite(status) || status < 200 || status >= 300) {
+        reject(
+          new Error(
+            body?.detail ??
+              body?.message ??
+              `NVIDIA LLM 요청 실패 HTTP ${status}`,
+          ),
+        );
+        return;
+      }
+
+      resolve(body);
+    });
+
+    const safeApiKey = String(nvidiaApiKey ?? "")
+      .replace(/\\/gu, "\\\\")
+      .replace(/"/gu, '\\"');
+    child.stdin.end(
+      `header = "Authorization: Bearer ${safeApiKey}"\n`,
+    );
+  });
+}
+
 async function requestVoiceLlm({
   url,
   model,
@@ -4997,26 +5097,36 @@ async function requestVoiceLlm({
   const startedAt = Date.now();
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      signal: controller.signal,
-      body: JSON.stringify({
+    let payload;
+
+    if (providerName === "nvidia") {
+      payload = await requestNvidiaVoiceLlmWithCurl({
         model,
         messages,
-        max_tokens: 96,
-        temperature: 0.2,
-        stream: false,
-      }),
-    });
-    const payload = await response.json().catch(() => null);
+        timeoutMs,
+      });
+    } else {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: 96,
+          temperature: 0.2,
+          stream: false,
+        }),
+      });
+      payload = await response.json().catch(() => null);
 
-    if (!response.ok) {
-      throw new Error(
-        payload?.detail ??
-          payload?.message ??
-          `LLM 요청 실패 HTTP ${response.status}`,
-      );
+      if (!response.ok) {
+        throw new Error(
+          payload?.detail ??
+            payload?.message ??
+            `LLM 요청 실패 HTTP ${response.status}`,
+        );
+      }
     }
 
     const reply = sanitizeVoiceLlmReply(
