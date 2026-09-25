@@ -34,6 +34,21 @@ function getDateInput(text) {
   return "오늘";
 }
 
+function isValidRoomNameTarget(value) {
+  const normalized = normalizeTranscript(value).replace(/\s+/gu, "");
+
+  if (!normalized) {
+    return false;
+  }
+
+  return ![
+    "방이름",
+    "통화방이름",
+    "수다방이름",
+    "이름",
+  ].includes(normalized);
+}
+
 export function parseVoiceCommand(rawTranscript) {
   const text = normalizeTranscript(rawTranscript);
 
@@ -79,7 +94,7 @@ export function parseVoiceCommand(rawTranscript) {
   if (renameMatch) {
     const name = renameMatch[1].replace(POLITE_ENDING_PATTERN, "").trim();
 
-    if (name) {
+    if (name && isValidRoomNameTarget(name)) {
       return { type: "room-name", name };
     }
   }
@@ -90,7 +105,7 @@ export function parseVoiceCommand(rawTranscript) {
   if (renamePrefixMatch) {
     const name = renamePrefixMatch[1].replace(POLITE_ENDING_PATTERN, "").trim();
 
-    if (name) {
+    if (name && isValidRoomNameTarget(name)) {
       return { type: "room-name", name };
     }
   }
