@@ -22,6 +22,8 @@ export const neisApiKey =
   process.env.NEIS_API_KEY ?? "d1c3d45db6004d0199fc445ba2510657";
 
 export const nvidiaApiKey = process.env.NVIDIA_API_KEY ?? null;
+export const voiceLlmCloudModel =
+  process.env.VOICE_LLM_CLOUD_MODEL ?? "mistralai/mistral-nemotron";
 export const voiceLlmBaseUrl =
   process.env.VOICE_LLM_BASE_URL ?? "http://127.0.0.1:8081/v1";
 export const voiceLlmModel =
